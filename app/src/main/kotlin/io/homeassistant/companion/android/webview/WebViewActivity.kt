@@ -1423,23 +1423,25 @@ class WebViewActivity :
         if (hasFocus && !isFinishing) {
             lifecycleScope.launch {
                 unlockAppIfNeeded()
-                var path = intent.getStringExtra(EXTRA_PATH)
-                if (path?.startsWith("entityId:") == true) {
-                    // Get the entity ID from a string formatted "entityId:domain.entity"
-                    // https://github.com/home-assistant/core/blob/dev/homeassistant/core.py#L159
+                val intentPath = intent.getStringExtra(EXTRA_PATH)
+                intent.removeExtra(EXTRA_PATH)
+                // Let the presenter handle falling back to the current WebView path
+                // when no explicit navigation path is set. See https://github.com/home-assistant/android/issues/4983
+                var path: String? = intentPath
+                if (intentPath?.startsWith("entityId:") == true) {
                     val pattern = "(?<=^entityId:)((?!.+__)(?!_)[\\da-z_]+(?<!_)\\.(?!_)[\\da-z_]+(?<!_)$)".toRegex()
-                    val entity = pattern.find(path)?.value ?: ""
+                    val entity = pattern.find(intentPath)?.value ?: ""
                     if (
                         entity.isNotBlank() &&
                         serverManager.getServer(presenter.getActiveServer())?.version?.isAtLeast(2025, 6, 0) == true
                     ) {
                         path = "/?more-info-entity-id=$entity"
+                        moreInfoEntity = ""
                     } else {
                         moreInfoEntity = entity
                     }
                 }
                 presenter.load(lifecycle, path, isInternalOverride)
-                intent.removeExtra(EXTRA_PATH)
 
                 if (presenter.isFullScreen() || isVideoFullScreen) {
                     hideSystemUI()
@@ -1448,6 +1450,10 @@ class WebViewActivity :
                 }
             }
         }
+    }
+
+    override fun getCurrentWebViewPath(): String? {
+        return webView.url?.toUri()?.path?.takeIf { it.length > 1 }
     }
 
     override suspend fun unlockAppIfNeeded() {
