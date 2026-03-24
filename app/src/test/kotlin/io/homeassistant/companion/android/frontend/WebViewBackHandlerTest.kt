@@ -69,7 +69,7 @@ class WebViewBackHandlerTest {
     }
 
     @Test
-    fun `resolveBackAction returns Exit when on root path with fragment only`() {
+    fun `resolveBackAction returns Exit when on root path`() {
         val webView = mockWebView(canGoBack = false)
         val loadedUrl = Uri.parse("https://ha.local:8123/?external_auth=1")
 

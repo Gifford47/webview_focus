@@ -143,13 +143,16 @@ internal fun FrontendScreenContent(
     onSecurityLevelDone: () -> Unit = {},
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
-    val loadedUrl = remember(viewState.url) {
-        viewState.url.takeIf { it.isNotEmpty() }?.let { Uri.parse(it) }
+    // Track the effective URL: starts from viewState, but updates when
+    // WebViewBackHandler navigates to root (so the next back press exits).
+    var currentUrl by remember(viewState.url) {
+        mutableStateOf(viewState.url.takeIf { it.isNotEmpty() }?.let { Uri.parse(it) })
     }
 
     WebViewBackHandler(
         webView = webView,
-        loadedUrl = loadedUrl,
+        loadedUrl = currentUrl,
+        onNavigatedToRoot = { rootUrl -> currentUrl = rootUrl },
         onExit = onBackClick,
     )
 
@@ -421,6 +424,7 @@ private fun Color.Overlay(modifier: Modifier = Modifier) {
 internal fun WebViewBackHandler(
     webView: WebView?,
     loadedUrl: Uri?,
+    onNavigatedToRoot: (Uri) -> Unit,
     onExit: () -> Unit,
 ) {
     BackHandler(enabled = webView != null) {
@@ -430,6 +434,7 @@ internal fun WebViewBackHandler(
             is BackAction.NavigateToRoot -> {
                 wv.clearHistory()
                 wv.loadUrl(action.rootUrl.toString())
+                onNavigatedToRoot(action.rootUrl)
             }
             BackAction.Exit -> onExit()
         }
