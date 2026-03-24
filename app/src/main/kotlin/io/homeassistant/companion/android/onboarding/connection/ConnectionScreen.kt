@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -65,6 +66,7 @@ internal fun ConnectionScreen(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    BackHandler(onBack = onBackClick)
     Box(modifier = modifier.testTag(CONNECTION_SCREEN_TAG)) {
         Spacer(
             modifier = Modifier
@@ -84,7 +86,6 @@ internal fun ConnectionScreen(
                         this.webViewClient = webViewClient
                         loadUrl(url)
                     },
-                    onBackPressed = onBackClick,
                 )
             } ?: Timber.i("ConnectionScreen: url is null")
         } else {
