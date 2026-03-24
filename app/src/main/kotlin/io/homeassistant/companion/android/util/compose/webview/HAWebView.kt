@@ -7,7 +7,6 @@ import android.os.Build
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.widget.FrameLayout
-import androidx.activity.compose.BackHandler
 import androidx.annotation.VisibleForTesting
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -58,8 +57,6 @@ fun HAWebView(
     modifier: Modifier = Modifier,
     configure: WebView.() -> Unit = {},
     factory: () -> WebView? = { null },
-    // Only used when the backstack of the webView is empty
-    onBackPressed: (() -> Unit)? = null,
     nightModeTheme: NightModeTheme? = null,
 ) {
     var webview by remember { mutableStateOf<WebView?>(null) }
@@ -90,13 +87,6 @@ fun HAWebView(
             webview = null
         },
     )
-
-    // To avoid checking doUpdateVisitedHistory from the webViewClient we simply delegate the back button handling
-    // to the webView and when the webview backstack is empty we call the callback given in parameter that should be
-    // handle by the navHost.
-    BackHandler(onBackPressed != null) {
-        webview.takeIf { it?.canGoBack() == true }?.goBack() ?: onBackPressed?.invoke()
-    }
 }
 
 fun WebView.settings(configureDsl: WebSettings.() -> Unit) {

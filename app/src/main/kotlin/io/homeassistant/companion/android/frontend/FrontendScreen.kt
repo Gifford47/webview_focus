@@ -3,6 +3,7 @@ package io.homeassistant.companion.android.frontend
 import android.net.Uri
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,6 +49,8 @@ import io.homeassistant.companion.android.onboarding.locationforsecureconnection
 import io.homeassistant.companion.android.onboarding.locationforsecureconnection.LocationForSecureConnectionViewModelFactory
 import io.homeassistant.companion.android.util.compose.HAPreviews
 import io.homeassistant.companion.android.util.compose.webview.HAWebView
+import io.homeassistant.companion.android.util.hasNonRootPath
+import io.homeassistant.companion.android.util.hasSameOrigin
 import io.homeassistant.companion.android.util.sensitive
 import io.homeassistant.companion.android.webview.insecure.BlockInsecureScreen
 import kotlinx.coroutines.flow.Flow
@@ -140,6 +143,15 @@ internal fun FrontendScreenContent(
     onSecurityLevelDone: () -> Unit = {},
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
+    val loadedUrl = remember(viewState.url) {
+        viewState.url.takeIf { it.isNotEmpty() }?.let { Uri.parse(it) }
+    }
+
+    WebViewBackHandler(
+        webView = webView,
+        loadedUrl = loadedUrl,
+        onExit = onBackClick,
+    )
 
     WebViewEffects(
         webView = webView,
@@ -150,7 +162,6 @@ internal fun FrontendScreenContent(
     Box(modifier = modifier.fillMaxSize()) {
         // Always render WebView at base layer
         SafeHAWebView(
-            onBackClick = onBackClick,
             onWebViewCreated = { webView = it },
             webViewClient = webViewClient,
             frontendJsCallback = frontendJsCallback,
@@ -311,7 +322,6 @@ private fun ErrorOverlay(
  */
 @Composable
 private fun SafeHAWebView(
-    onBackClick: () -> Unit,
     onWebViewCreated: (WebView) -> Unit,
     webViewClient: WebViewClient,
     frontendJsCallback: FrontendJsCallback,
@@ -367,7 +377,6 @@ private fun SafeHAWebView(
                         frontendJsCallback.attachToWebView(this)
                         this.webViewClient = webViewClient
                     },
-                    onBackPressed = onBackClick,
                 )
             }
 
@@ -396,6 +405,78 @@ private fun SafeHAWebView(
 @Composable
 private fun Color.Overlay(modifier: Modifier = Modifier) {
     Spacer(modifier = modifier.background(this))
+}
+
+/**
+ * Handles back navigation for the WebView with cross-origin safety and
+ * navigate-to-root behavior, matching the logic in [io.homeassistant.companion.android.webview.WebViewActivity].
+ *
+ * The handler:
+ * 1. Goes back in WebView history only if the previous entry has the same origin
+ *    as [loadedUrl] (prevents navigating to stale entries from a different connection).
+ * 2. If on a non-root path with no valid back history, navigates to the root URL first.
+ * 3. Calls [onExit] (typically `navController.popBackStack()`) only when already on root.
+ */
+@Composable
+internal fun WebViewBackHandler(
+    webView: WebView?,
+    loadedUrl: Uri?,
+    onExit: () -> Unit,
+) {
+    BackHandler(enabled = webView != null) {
+        val wv = webView ?: return@BackHandler
+        when (val action = resolveBackAction(wv, loadedUrl)) {
+            BackAction.GoBack -> wv.goBack()
+            is BackAction.NavigateToRoot -> {
+                wv.clearHistory()
+                wv.loadUrl(action.rootUrl.toString())
+            }
+            BackAction.Exit -> onExit()
+        }
+    }
+}
+
+internal sealed interface BackAction {
+    data object GoBack : BackAction
+    data class NavigateToRoot(val rootUrl: Uri) : BackAction
+    data object Exit : BackAction
+}
+
+/**
+ * Determines the appropriate back action based on WebView history and current URL.
+ */
+internal fun resolveBackAction(webView: WebView, loadedUrl: Uri?): BackAction {
+    if (webView.canGoBack()) {
+        val backForwardList = webView.copyBackForwardList()
+        val currentIndex = backForwardList.currentIndex
+        if (currentIndex > 0) {
+            val previousUrl = Uri.parse(
+                backForwardList.getItemAtIndex(currentIndex - 1).url,
+            )
+            if (loadedUrl != null &&
+                previousUrl.scheme?.startsWith("http") == true &&
+                previousUrl.hasSameOrigin(loadedUrl)
+            ) {
+                return BackAction.GoBack
+            }
+        } else {
+            return BackAction.GoBack
+        }
+    }
+
+    // History is empty or previous entry has a different origin.
+    // Navigate to root URL before exiting the screen.
+    if (loadedUrl != null && loadedUrl.hasNonRootPath()) {
+        val rootUrl = loadedUrl.buildUpon()
+            .path("/")
+            .clearQuery()
+            .appendQueryParameter("external_auth", "1")
+            .fragment(null)
+            .build()
+        return BackAction.NavigateToRoot(rootUrl)
+    }
+
+    return BackAction.Exit
 }
 
 /**
