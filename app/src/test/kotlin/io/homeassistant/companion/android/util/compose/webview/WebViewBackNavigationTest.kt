@@ -1,4 +1,4 @@
-package io.homeassistant.companion.android.frontend
+package io.homeassistant.companion.android.util.compose.webview
 
 import android.net.Uri
 import android.webkit.WebBackForwardList
@@ -13,7 +13,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
-class WebViewBackHandlerTest {
+class WebViewBackNavigationTest {
 
     private fun mockWebView(canGoBack: Boolean = false): WebView = mockk {
         every { this@mockk.canGoBack() } returns canGoBack
@@ -63,7 +63,6 @@ class WebViewBackHandlerTest {
         val rootUrl = (action as BackAction.NavigateToRoot).rootUrl
         assertEquals("/", rootUrl.path)
         assertEquals("1", rootUrl.getQueryParameter("external_auth"))
-        // Original query params and fragment should be stripped
         assertEquals(null, rootUrl.getQueryParameter("start_date"))
         assertEquals(null, rootUrl.fragment)
     }

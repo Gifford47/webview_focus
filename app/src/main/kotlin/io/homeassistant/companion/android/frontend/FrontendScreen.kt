@@ -55,9 +55,9 @@ import io.homeassistant.companion.android.onboarding.locationforsecureconnection
 import io.homeassistant.companion.android.onboarding.locationforsecureconnection.LocationForSecureConnectionViewModel
 import io.homeassistant.companion.android.onboarding.locationforsecureconnection.LocationForSecureConnectionViewModelFactory
 import io.homeassistant.companion.android.util.compose.HAPreviews
+import io.homeassistant.companion.android.util.compose.webview.BackAction
 import io.homeassistant.companion.android.util.compose.webview.HAWebView
-import io.homeassistant.companion.android.util.hasNonRootPath
-import io.homeassistant.companion.android.util.hasSameOrigin
+import io.homeassistant.companion.android.util.compose.webview.resolveBackAction
 import io.homeassistant.companion.android.util.sensitive
 import io.homeassistant.companion.android.webview.insecure.BlockInsecureScreen
 import kotlinx.coroutines.flow.Flow
@@ -457,7 +457,7 @@ private fun Color.Overlay(modifier: Modifier = Modifier) {
 
 /**
  * Handles back navigation for the WebView with cross-origin safety and
- * navigate-to-root behavior, matching the logic in [io.homeassistant.companion.android.webview.WebViewActivity].
+ * navigate-to-root behavior, using the shared [resolveBackAction] logic.
  *
  * The handler:
  * 1. Goes back in WebView history only if the previous entry has the same origin
@@ -484,49 +484,6 @@ internal fun WebViewBackHandler(
             BackAction.Exit -> onExit()
         }
     }
-}
-
-internal sealed interface BackAction {
-    data object GoBack : BackAction
-    data class NavigateToRoot(val rootUrl: Uri) : BackAction
-    data object Exit : BackAction
-}
-
-/**
- * Determines the appropriate back action based on WebView history and current URL.
- */
-internal fun resolveBackAction(webView: WebView, loadedUrl: Uri?): BackAction {
-    if (webView.canGoBack()) {
-        val backForwardList = webView.copyBackForwardList()
-        val currentIndex = backForwardList.currentIndex
-        if (currentIndex > 0) {
-            val previousUrl = Uri.parse(
-                backForwardList.getItemAtIndex(currentIndex - 1).url,
-            )
-            if (loadedUrl != null &&
-                previousUrl.scheme?.startsWith("http") == true &&
-                previousUrl.hasSameOrigin(loadedUrl)
-            ) {
-                return BackAction.GoBack
-            }
-        } else {
-            return BackAction.GoBack
-        }
-    }
-
-    // History is empty or previous entry has a different origin.
-    // Navigate to root URL before exiting the screen.
-    if (loadedUrl != null && loadedUrl.hasNonRootPath()) {
-        val rootUrl = loadedUrl.buildUpon()
-            .path("/")
-            .clearQuery()
-            .appendQueryParameter("external_auth", "1")
-            .fragment(null)
-            .build()
-        return BackAction.NavigateToRoot(rootUrl)
-    }
-
-    return BackAction.Exit
 }
 
 /**
