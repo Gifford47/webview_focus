@@ -53,6 +53,7 @@ internal fun ConnectionScreen(onBackClick: () -> Unit, viewModel: ConnectionView
         isError = isError,
         webViewClient = viewModel.webViewClient,
         onBackClick = onBackClick,
+        onWebViewCreationFailed = viewModel::onWebViewCreationFailed,
         modifier = modifier,
     )
 }
@@ -64,6 +65,7 @@ internal fun ConnectionScreen(
     isError: Boolean,
     webViewClient: WebViewClient,
     onBackClick: () -> Unit,
+    onWebViewCreationFailed: (Throwable) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     BackHandler(onBack = onBackClick)
@@ -86,6 +88,7 @@ internal fun ConnectionScreen(
                         this.webViewClient = webViewClient
                         loadUrl(url)
                     },
+                    onWebViewCreationFailed = onWebViewCreationFailed,
                 )
             } ?: Timber.i("ConnectionScreen: url is null")
         } else {
@@ -126,6 +129,7 @@ private fun ConnectionScreenPreview() {
             isError = false,
             webViewClient = WebViewClient(),
             onBackClick = {},
+            onWebViewCreationFailed = {},
             modifier = Modifier.fillMaxSize(),
         )
     }
