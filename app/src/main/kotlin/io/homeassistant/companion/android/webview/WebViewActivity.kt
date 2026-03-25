@@ -139,6 +139,7 @@ import io.homeassistant.companion.android.util.OnSwipeListener
 import io.homeassistant.companion.android.util.TLSWebViewClient
 import io.homeassistant.companion.android.util.applyInsets
 import io.homeassistant.companion.android.util.compose.webview.BackAction
+import io.homeassistant.companion.android.util.compose.webview.BLANK_URL
 import io.homeassistant.companion.android.util.compose.webview.resolveBackAction
 import io.homeassistant.companion.android.util.hasNonRootPath
 import io.homeassistant.companion.android.util.hasSameOrigin
@@ -809,21 +810,45 @@ class WebViewActivity :
                         }
 
                         MatterThreadStep.THREAD_SENT -> {
-                            Toast.makeText(
-                                this@WebViewActivity,
-                                commonR.string.thread_export_success,
-                                Toast.LENGTH_SHORT,
-                            ).show()
+                            launch {
+                                snackbarHostState.showSnackbar(getString(commonR.string.thread_export_success))
+                            }
                             alertDialog?.cancel()
                             presenter.finishMatterThreadFlow()
                         }
 
-                        MatterThreadStep.ERROR_MATTER -> {
-                            Toast.makeText(
-                                this@WebViewActivity,
-                                commonR.string.matter_commissioning_unavailable,
-                                Toast.LENGTH_SHORT,
-                            ).show()
+                        MatterThreadStep.ERROR_MATTER_CANCELLED,
+                        MatterThreadStep.ERROR_MATTER_OTHER,
+                        MatterThreadStep.ERROR_THREAD_OTHER,
+                        -> {
+                            val message = when (it) {
+                                MatterThreadStep.ERROR_MATTER_CANCELLED ->
+                                    commonR.string.matter_commissioning_cancelled
+                                MatterThreadStep.ERROR_MATTER_OTHER ->
+                                    commonR.string.matter_commissioning_unavailable
+                                MatterThreadStep.ERROR_THREAD_OTHER ->
+                                    commonR.string.thread_export_unavailable
+                            }
+                            val uri = when (it) {
+                                MatterThreadStep.ERROR_MATTER_CANCELLED ->
+                                    "https://www.home-assistant.io/integrations/matter#troubleshooting"
+                                MatterThreadStep.ERROR_MATTER_OTHER,
+                                MatterThreadStep.ERROR_THREAD_OTHER,
+                                ->
+                                    "https://www.home-assistant.io/integrations/matter#troubleshooting-the-installation"
+                            }
+                            launch {
+                                if (snackbarHostState.showSnackbar(
+                                        message = getString(message),
+                                        actionLabel = getString(commonR.string.get_help),
+                                        duration = SnackbarDuration.Long,
+                                    ) == SnackbarResult.ActionPerformed
+                                ) {
+                                    val intent = Intent(Intent.ACTION_VIEW, uri.toUri())
+                                    startActivity(intent)
+                                }
+                            }
+                            alertDialog?.cancel()
                             presenter.finishMatterThreadFlow()
                         }
 
@@ -833,16 +858,6 @@ class WebViewActivity :
                                 .setMessage(commonR.string.thread_export_not_connected)
                                 .setPositiveButton(commonR.string.ok, null)
                                 .show()
-                            presenter.finishMatterThreadFlow()
-                        }
-
-                        MatterThreadStep.ERROR_THREAD_OTHER -> {
-                            Toast.makeText(
-                                this@WebViewActivity,
-                                commonR.string.thread_export_unavailable,
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                            alertDialog?.cancel()
                             presenter.finishMatterThreadFlow()
                         }
 
@@ -951,6 +966,13 @@ class WebViewActivity :
                                     )
                                 }
 
+                                "assist/settings" -> startActivity(
+                                    SettingsActivity.newInstance(
+                                        this@WebViewActivity,
+                                        SettingsActivity.Deeplink.AssistSettings,
+                                    ),
+                                )
+
                                 "config_screen/show" ->
                                     startActivity(
                                         SettingsActivity.newInstance(this@WebViewActivity),
@@ -1011,6 +1033,7 @@ class WebViewActivity :
                                 "theme-update" -> getAndSetStatusBarNavigationBarColors()
                                 "entity/add_to/get_actions" -> getActions(json)
                                 "entity/add_to" -> addEntityTo(json)
+
                                 else -> presenter.onExternalBusMessage(json)
                             }
                         }
@@ -1535,7 +1558,11 @@ class WebViewActivity :
 
     override fun loadUrl(url: Uri, keepHistory: Boolean, openInApp: Boolean, serverHandleInsets: Boolean) {
         Timber.d(
-            "Loading ${sensitive(url.toString())} (keepHistory $keepHistory, openInApp $openInApp, serverHandleInsets $serverHandleInsets)",
+            "Loading ${
+                sensitive(
+                    url.toString(),
+                )
+            } (keepHistory $keepHistory, openInApp $openInApp, serverHandleInsets $serverHandleInsets)",
         )
         this.serverHandleInsets.value = serverHandleInsets
         if (openInApp) {
@@ -1626,7 +1653,7 @@ class WebViewActivity :
                 }
             }
             // Make sure the WebView won't load anything in background to avoid leaking
-            webView.loadUrl("about:blank")
+            webView.loadUrl(BLANK_URL)
             loadedUrl = null
             supportFragmentManager.beginTransaction()
                 .replace(
