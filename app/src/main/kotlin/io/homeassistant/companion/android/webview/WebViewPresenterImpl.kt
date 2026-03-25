@@ -161,7 +161,7 @@ class WebViewPresenterImpl @Inject constructor(
                 shouldConsumePath = effectiveRelativeUrl != null,
                 // Clear history when the base URL changes (e.g. internal <-> external)
                 // because old URLs in the back stack would be unreachable on the new network.
-                isNewServer = isNewServer || baseUrlChanged,
+                clearHistory = isNewServer || baseUrlChanged,
             )
         }
     }
@@ -198,13 +198,13 @@ class WebViewPresenterImpl @Inject constructor(
         urlState: UrlState,
         path: String?,
         shouldConsumePath: Boolean,
-        isNewServer: Boolean,
+        clearHistory: Boolean,
     ) {
         when (urlState) {
             is UrlState.HasUrl -> loadUrl(
                 baseUrl = urlState.url,
                 path = if (shouldConsumePath) path else null,
-                isNewServer = isNewServer,
+                clearHistory = clearHistory,
             )
 
             UrlState.InsecureState -> view.showBlockInsecure(serverId = serverId)
@@ -219,9 +219,9 @@ class WebViewPresenterImpl @Inject constructor(
      *
      * @param baseUrl the base server URL
      * @param path optional path to append (ignored if starts with "entityId:")
-     * @param isNewServer whether this is a new server (affects history behavior)
+     * @param clearHistory whether to clear WebView history after loading (e.g. on server or connection switch)
      */
-    private suspend fun loadUrl(baseUrl: URL?, path: String?, isNewServer: Boolean) {
+    private suspend fun loadUrl(baseUrl: URL?, path: String?, clearHistory: Boolean) {
         val urlToLoad = if (path != null && !path.startsWith("entityId:")) {
             UrlUtil.handle(baseUrl, path)
         } else {
@@ -244,7 +244,7 @@ class WebViewPresenterImpl @Inject constructor(
                 } else {
                     view.loadUrl(
                         url = urlWithAuth,
-                        keepHistory = !isNewServer,
+                        keepHistory = !clearHistory,
                         openInApp = it.baseIsEqual(baseUrl),
                         // We need the frontend to notify us of the mode to use for the status bar https://github.com/home-assistant/frontend/issues/29125
                         serverHandleInsets = false,
@@ -581,7 +581,7 @@ class WebViewPresenterImpl @Inject constructor(
 
                         is ThreadManager.SyncResult.NoneHaveCredentials,
                         is ThreadManager.SyncResult.OnlyOnServer,
-                            -> {
+                        -> {
                             mutableMatterThreadStep.tryEmit(MatterThreadStep.THREAD_NONE)
                         }
 
