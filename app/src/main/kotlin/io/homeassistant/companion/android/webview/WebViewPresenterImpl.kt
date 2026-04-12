@@ -161,7 +161,7 @@ class WebViewPresenterImpl @Inject constructor(
                 shouldConsumePath = effectiveRelativeUrl != null,
                 // Clear history when the base URL changes (e.g. internal <-> external)
                 // because old URLs in the back stack would be unreachable on the new network.
-                clearHistory = isNewServer || baseUrlChanged,
+                keepHistory = !(isNewServer || baseUrlChanged),
             )
         }
     }
@@ -198,13 +198,13 @@ class WebViewPresenterImpl @Inject constructor(
         urlState: UrlState,
         path: String?,
         shouldConsumePath: Boolean,
-        clearHistory: Boolean,
+        keepHistory: Boolean,
     ) {
         when (urlState) {
             is UrlState.HasUrl -> loadUrl(
                 baseUrl = urlState.url,
                 path = if (shouldConsumePath) path else null,
-                clearHistory = clearHistory,
+                keepHistory = keepHistory,
             )
 
             UrlState.InsecureState -> view.showBlockInsecure(serverId = serverId)
@@ -219,9 +219,10 @@ class WebViewPresenterImpl @Inject constructor(
      *
      * @param baseUrl the base server URL
      * @param path optional path to append (ignored if starts with "entityId:")
-     * @param clearHistory whether to clear WebView history after loading (e.g. on server or connection switch)
+     * @param keepHistory whether to keep WebView history after loading. False when the
+     *        base URL changes (e.g. server or connection switch) so old entries become unreachable.
      */
-    private suspend fun loadUrl(baseUrl: URL?, path: String?, clearHistory: Boolean) {
+    private suspend fun loadUrl(baseUrl: URL?, path: String?, keepHistory: Boolean) {
         val urlToLoad = if (path != null && !path.startsWith("entityId:")) {
             UrlUtil.handle(baseUrl, path)
         } else {
@@ -244,7 +245,7 @@ class WebViewPresenterImpl @Inject constructor(
                 } else {
                     view.loadUrl(
                         url = urlWithAuth,
-                        keepHistory = !clearHistory,
+                        keepHistory = keepHistory,
                         openInApp = it.baseIsEqual(baseUrl),
                         // We need the frontend to notify us of the mode to use for the status bar https://github.com/home-assistant/frontend/issues/29125
                         serverHandleInsets = false,

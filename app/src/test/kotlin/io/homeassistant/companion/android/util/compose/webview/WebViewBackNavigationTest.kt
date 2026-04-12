@@ -1,11 +1,6 @@
 package io.homeassistant.companion.android.util.compose.webview
 
 import android.net.Uri
-import android.webkit.WebBackForwardList
-import android.webkit.WebHistoryItem
-import android.webkit.WebView
-import io.mockk.every
-import io.mockk.mockk
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,35 +10,27 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class WebViewBackNavigationTest {
 
-    private fun mockWebView(canGoBack: Boolean = false): WebView = mockk {
-        every { this@mockk.canGoBack() } returns canGoBack
-    }
-
     @Test
-    fun `resolveBackAction returns Exit when no history and root URL`() {
-        val webView = mockWebView(canGoBack = false)
+    fun `given no previous url and root loaded url, when resolving back action, then returns None`() {
         val loadedUrl = Uri.parse("https://ha.local:8123/?external_auth=1")
 
-        val action = resolveBackAction(webView, loadedUrl)
+        val action = resolveBackAction(previousUrl = null, loadedUrl = loadedUrl)
 
-        assertEquals(BackAction.Exit, action)
+        assertEquals(BackAction.None, action)
     }
 
     @Test
-    fun `resolveBackAction returns Exit when loadedUrl is null`() {
-        val webView = mockWebView(canGoBack = false)
+    fun `given no previous url and null loaded url, when resolving back action, then returns None`() {
+        val action = resolveBackAction(previousUrl = null, loadedUrl = null)
 
-        val action = resolveBackAction(webView, null)
-
-        assertEquals(BackAction.Exit, action)
+        assertEquals(BackAction.None, action)
     }
 
     @Test
-    fun `resolveBackAction returns NavigateToRoot when on sub-path with no history`() {
-        val webView = mockWebView(canGoBack = false)
+    fun `given no previous url and sub-path loaded url, when resolving back action, then returns NavigateToRoot`() {
         val loadedUrl = Uri.parse("https://ha.local:8123/history?external_auth=1")
 
-        val action = resolveBackAction(webView, loadedUrl)
+        val action = resolveBackAction(previousUrl = null, loadedUrl = loadedUrl)
 
         assertTrue(action is BackAction.NavigateToRoot)
         val rootUrl = (action as BackAction.NavigateToRoot).rootUrl
@@ -53,11 +40,10 @@ class WebViewBackNavigationTest {
     }
 
     @Test
-    fun `resolveBackAction NavigateToRoot strips query params and fragment`() {
-        val webView = mockWebView(canGoBack = false)
+    fun `given sub-path loaded url with extra params, when resolving back action, then NavigateToRoot strips query and fragment`() {
         val loadedUrl = Uri.parse("https://ha.local:8123/history?start_date=2026-01-01&external_auth=1#tab")
 
-        val action = resolveBackAction(webView, loadedUrl)
+        val action = resolveBackAction(previousUrl = null, loadedUrl = loadedUrl)
 
         assertTrue(action is BackAction.NavigateToRoot)
         val rootUrl = (action as BackAction.NavigateToRoot).rootUrl
@@ -68,51 +54,31 @@ class WebViewBackNavigationTest {
     }
 
     @Test
-    fun `resolveBackAction returns Exit when on root path`() {
-        val webView = mockWebView(canGoBack = false)
-        val loadedUrl = Uri.parse("https://ha.local:8123/?external_auth=1")
-
-        val action = resolveBackAction(webView, loadedUrl)
-
-        assertEquals(BackAction.Exit, action)
-    }
-
-    @Test
-    fun `resolveBackAction returns GoBack when history has same-origin previous entry`() {
-        val previousItem = mockk<WebHistoryItem> {
-            every { url } returns "https://ha.local:8123/lovelace/0"
-        }
-        val backForwardList = mockk<WebBackForwardList> {
-            every { currentIndex } returns 1
-            every { getItemAtIndex(0) } returns previousItem
-        }
-        val webView = mockk<WebView> {
-            every { canGoBack() } returns true
-            every { copyBackForwardList() } returns backForwardList
-        }
+    fun `given same-origin previous url, when resolving back action, then returns GoBack`() {
+        val previousUrl = Uri.parse("https://ha.local:8123/lovelace/0")
         val loadedUrl = Uri.parse("https://ha.local:8123/history?external_auth=1")
 
-        val action = resolveBackAction(webView, loadedUrl)
+        val action = resolveBackAction(previousUrl = previousUrl, loadedUrl = loadedUrl)
 
         assertEquals(BackAction.GoBack, action)
     }
 
     @Test
-    fun `resolveBackAction returns NavigateToRoot when history has cross-origin previous entry`() {
-        val previousItem = mockk<WebHistoryItem> {
-            every { url } returns "https://other.server:8123/lovelace/0"
-        }
-        val backForwardList = mockk<WebBackForwardList> {
-            every { currentIndex } returns 1
-            every { getItemAtIndex(0) } returns previousItem
-        }
-        val webView = mockk<WebView> {
-            every { canGoBack() } returns true
-            every { copyBackForwardList() } returns backForwardList
-        }
+    fun `given cross-origin previous url and sub-path loaded url, when resolving back action, then returns NavigateToRoot`() {
+        val previousUrl = Uri.parse("https://other.server:8123/lovelace/0")
         val loadedUrl = Uri.parse("https://ha.local:8123/history?external_auth=1")
 
-        val action = resolveBackAction(webView, loadedUrl)
+        val action = resolveBackAction(previousUrl = previousUrl, loadedUrl = loadedUrl)
+
+        assertTrue(action is BackAction.NavigateToRoot)
+    }
+
+    @Test
+    fun `given non-http previous url, when resolving back action, then does not go back`() {
+        val previousUrl = Uri.parse("about:blank")
+        val loadedUrl = Uri.parse("https://ha.local:8123/history?external_auth=1")
+
+        val action = resolveBackAction(previousUrl = previousUrl, loadedUrl = loadedUrl)
 
         assertTrue(action is BackAction.NavigateToRoot)
     }

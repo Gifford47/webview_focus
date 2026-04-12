@@ -454,7 +454,7 @@ class WebViewActivity :
                         loadedUrl = action.rootUrl
                         webView.loadUrl(action.rootUrl.toString())
                     }
-                    BackAction.Exit -> {
+                    BackAction.None -> {
                         // Already on root — let the system handle back (exit app).
                         // We must temporarily disable this callback so that the
                         // dispatcher invokes the next handler in the chain (the
