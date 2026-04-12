@@ -13,9 +13,10 @@ import androidx.core.os.BundleCompat
 import coil3.imageLoader
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
-import coil3.size.Dimension
+import coil3.request.allowHardware
 import coil3.size.Precision
 import coil3.size.Size
+import coil3.toBitmap
 import dagger.hilt.android.AndroidEntryPoint
 import io.homeassistant.companion.android.R
 import io.homeassistant.companion.android.common.data.servers.ServerManager
@@ -29,8 +30,8 @@ import io.homeassistant.companion.android.webview.WebViewActivity
 import io.homeassistant.companion.android.widgets.ACTION_APPWIDGET_CREATED
 import io.homeassistant.companion.android.widgets.BaseWidgetProvider.Companion.UPDATE_WIDGETS
 import io.homeassistant.companion.android.widgets.EXTRA_WIDGET_ENTITY
-import io.homeassistant.companion.android.widgets.common.RemoteViewsTarget
 import javax.inject.Inject
+import kotlin.math.sqrt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -81,8 +82,7 @@ class CameraWidget : AppWidgetProvider() {
             Timber.d("Skipping widget update since network connection is not active")
             return
         }
-        val views = getWidgetRemoteViews(context, appWidgetId)
-        views?.let { appWidgetManager.updateAppWidget(appWidgetId, it) }
+        appWidgetManager.updateAppWidget(appWidgetId, getWidgetRemoteViews(context, appWidgetId))
     }
 
     private suspend fun updateAllWidgets(context: Context) {
@@ -107,7 +107,7 @@ class CameraWidget : AppWidgetProvider() {
         }
     }
 
-    private suspend fun getWidgetRemoteViews(context: Context, appWidgetId: Int): RemoteViews? {
+    private suspend fun getWidgetRemoteViews(context: Context, appWidgetId: Int): RemoteViews {
         val updateCameraIntent = Intent(context, CameraWidget::class.java).apply {
             action = UPDATE_IMAGE
             putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
@@ -165,16 +165,22 @@ class CameraWidget : AppWidgetProvider() {
                     )
                     Timber.d("Fetching camera image")
                     try {
-                        val request = ImageRequest.Builder(context)
-                            .data(url)
-                            .target(RemoteViewsTarget(context, appWidgetId, this, R.id.widgetCameraImage))
-                            .diskCachePolicy(CachePolicy.DISABLED)
-                            .memoryCachePolicy(CachePolicy.DISABLED)
-                            .networkCachePolicy(CachePolicy.READ_ONLY)
-                            .size(Size(getScreenWidth(), Dimension.Undefined))
-                            .precision(Precision.INEXACT)
-                            .build()
-                        context.imageLoader.enqueue(request)
+                        context.imageLoader.execute(
+                            ImageRequest.Builder(context)
+                                .data(url)
+                                // RemoteViews requires software bitmaps for serialization
+                                .allowHardware(false)
+                                .diskCachePolicy(CachePolicy.DISABLED)
+                                .memoryCachePolicy(CachePolicy.DISABLED)
+                                .networkCachePolicy(CachePolicy.READ_ONLY)
+                                .size(getWidgetBitmapSize(AppWidgetManager.getInstance(context), appWidgetId))
+                                .precision(Precision.INEXACT)
+                                .build(),
+                        ).image?.toBitmap()?.let {
+                            setImageViewBitmap(R.id.widgetCameraImage, it)
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         Timber.e(e, "Unable to fetch image")
                     }
@@ -199,8 +205,7 @@ class CameraWidget : AppWidgetProvider() {
                 setOnClickPendingIntent(R.id.widgetCameraPlaceholder, tapWidgetPendingIntent)
             }
         }
-        // If there is an url, Coil will call appWidgetManager.updateAppWidget
-        return if (url == null) views else null
+        return views
     }
 
     private suspend fun retrieveCameraImageUrl(serverId: Int, entityId: String): String? {
@@ -264,7 +269,56 @@ class CameraWidget : AppWidgetProvider() {
         // Enter relevant functionality for when the last widget is disabled
     }
 
-    private fun getScreenWidth(): Int {
-        return Resources.getSystem().displayMetrics.widthPixels
+    /**
+     * Returns a [Size] based on the widget's allocated dimensions, capped to stay within the
+     * RemoteViews bitmap memory limit. Falls back to the full screen width and height when the
+     * widget manager does not report a size.
+     *
+     * The system computes the limit as `6 * screenWidth * screenHeight`
+     * (1.5× screen area × 4 bytes/pixel) in `AppWidgetServiceImpl.computeMaximumWidgetBitmapMemory`.
+     * https://cs.android.com/android/platform/superproject/+/8b289e3d7cf7fd9242870758a894c6e9b4c3e655:frameworks/base/services/appwidget/java/com/android/server/appwidget/AppWidgetServiceImpl.java;l=513
+     * There is no public API for this, so we replicate the formula and keep the camera bitmap
+     * under roughly 90% of that limit to leave headroom for other bitmap work in the same
+     * RemoteViews.
+     */
+    private fun getWidgetBitmapSize(appWidgetManager: AppWidgetManager, appWidgetId: Int): Size {
+        val res = Resources.getSystem()
+        val screenWidth = res.displayMetrics.widthPixels
+        val screenHeight = res.displayMetrics.heightPixels
+        // System limit = 1.5 × screen area × 4 bytes/pixel (ARGB_8888).
+        // Bytes-per-pixel cancels out when converting to pixels: 1.5 * w * h * 4 * 0.9 / 4 = 1.35 * w * h.
+        // The 0.9 factor keeps a 10% margin for RemoteViews overhead.
+        val maxPixels = (1.35 * screenWidth * screenHeight).toInt()
+
+        val options = appWidgetManager.getAppWidgetOptions(appWidgetId)
+        val widthDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, 0)
+        val heightDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0)
+
+        val widthPx: Int
+        val heightPx: Int
+        if (widthDp <= 0) {
+            widthPx = screenWidth
+            heightPx = screenHeight
+        } else {
+            val density = res.displayMetrics.density
+            widthPx = (widthDp * density).toInt()
+            heightPx = if (heightDp > 0) (heightDp * density).toInt() else 0
+        }
+
+        if (heightPx <= 0) {
+            // Height unknown, derive a max height from the pixel budget so the
+            // bitmap stays within limits even if the source image is unusually tall.
+            val cappedWidth = minOf(widthPx, maxPixels / maxOf(screenHeight, 1)).coerceAtLeast(1)
+            val maxHeight = (maxPixels / cappedWidth).coerceAtLeast(1)
+            return Size(cappedWidth, maxHeight)
+        }
+
+        // Scale down proportionally if the bitmap would exceed the safe pixel budget
+        return if (widthPx.toLong() * heightPx > maxPixels) {
+            val scale = sqrt(maxPixels.toDouble() / (widthPx.toLong() * heightPx)).toFloat()
+            Size((widthPx * scale).toInt().coerceAtLeast(1), (heightPx * scale).toInt().coerceAtLeast(1))
+        } else {
+            Size(widthPx.coerceAtLeast(1), heightPx.coerceAtLeast(1))
+        }
     }
 }
