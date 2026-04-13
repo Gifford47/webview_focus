@@ -11,7 +11,7 @@ import org.robolectric.RobolectricTestRunner
 class WebViewBackNavigationTest {
 
     @Test
-    fun `given no previous url and root loaded url, when resolving back action, then returns None`() {
+    fun `Given no previous url and root loaded url when resolving back action then returns None`() {
         val loadedUrl = Uri.parse("https://ha.local:8123/?external_auth=1")
 
         val action = resolveBackAction(previousUrl = null, loadedUrl = loadedUrl)
@@ -20,14 +20,14 @@ class WebViewBackNavigationTest {
     }
 
     @Test
-    fun `given no previous url and null loaded url, when resolving back action, then returns None`() {
+    fun `Given no previous url and null loaded url when resolving back action then returns None`() {
         val action = resolveBackAction(previousUrl = null, loadedUrl = null)
 
         assertEquals(BackAction.None, action)
     }
 
     @Test
-    fun `given no previous url and sub-path loaded url, when resolving back action, then returns NavigateToRoot`() {
+    fun `Given no previous url and sub-path loaded url when resolving back action then returns NavigateToRoot`() {
         val loadedUrl = Uri.parse("https://ha.local:8123/history?external_auth=1")
 
         val action = resolveBackAction(previousUrl = null, loadedUrl = loadedUrl)
@@ -40,7 +40,7 @@ class WebViewBackNavigationTest {
     }
 
     @Test
-    fun `given sub-path loaded url with extra params, when resolving back action, then NavigateToRoot strips query and fragment`() {
+    fun `Given sub-path loaded url with extra params when resolving back action then NavigateToRoot strips query and fragment`() {
         val loadedUrl = Uri.parse("https://ha.local:8123/history?start_date=2026-01-01&external_auth=1#tab")
 
         val action = resolveBackAction(previousUrl = null, loadedUrl = loadedUrl)
@@ -54,7 +54,7 @@ class WebViewBackNavigationTest {
     }
 
     @Test
-    fun `given same-origin previous url, when resolving back action, then returns GoBack`() {
+    fun `Given same-origin previous url when resolving back action then returns GoBack`() {
         val previousUrl = Uri.parse("https://ha.local:8123/lovelace/0")
         val loadedUrl = Uri.parse("https://ha.local:8123/history?external_auth=1")
 
@@ -64,7 +64,7 @@ class WebViewBackNavigationTest {
     }
 
     @Test
-    fun `given cross-origin previous url and sub-path loaded url, when resolving back action, then returns NavigateToRoot`() {
+    fun `Given cross-origin previous url and sub-path loaded url when resolving back action then returns NavigateToRoot`() {
         val previousUrl = Uri.parse("https://other.server:8123/lovelace/0")
         val loadedUrl = Uri.parse("https://ha.local:8123/history?external_auth=1")
 
@@ -74,7 +74,7 @@ class WebViewBackNavigationTest {
     }
 
     @Test
-    fun `given non-http previous url, when resolving back action, then does not go back`() {
+    fun `Given non-http previous url when resolving back action then returns NavigateToRoot`() {
         val previousUrl = Uri.parse("about:blank")
         val loadedUrl = Uri.parse("https://ha.local:8123/history?external_auth=1")
 

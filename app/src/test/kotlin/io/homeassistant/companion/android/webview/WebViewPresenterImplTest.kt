@@ -416,6 +416,47 @@ class WebViewPresenterImplTest {
     }
 
     @Test
+    fun `Given base url changes when collecting then preserves current path and clears history`() = runTest(testDispatcher) {
+        val server = mockk<Server>(relaxed = true)
+        val urlFlow = MutableStateFlow<UrlState>(UrlState.HasUrl(URL("https://internal.example.com")))
+
+        coEvery { serverManager.getServer(any<Int>()) } returns server
+        coEvery { authenticationRepository.getSessionState() } returns SessionState.CONNECTED
+        coEvery { connectionStateProvider.urlFlow(any()) } returns urlFlow
+        every { webView.getCurrentWebViewRelativeUrl() } returns "/history?start_date=2026-01-01"
+
+        lifecycle.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+        lifecycle.handleLifecycleEvent(Lifecycle.Event.ON_START)
+
+        createPresenter()
+
+        backgroundScope.launch {
+            presenter.load(lifecycle, path = null, isInternalOverride = null)
+        }
+
+        // Emit a new base URL (e.g. WiFi -> mobile data switch)
+        urlFlow.emit(UrlState.HasUrl(URL("https://external.example.com")))
+
+        val urlSlot = mutableListOf<Uri>()
+        val keepHistorySlot = mutableListOf<Boolean>()
+        verify(exactly = 2) {
+            webView.loadUrl(capture(urlSlot), capture(keepHistorySlot), any(), any())
+        }
+
+        // First load: initial internal URL, keeps history (no base URL change yet)
+        assertTrue(urlSlot[0].toString().startsWith("https://internal.example.com"))
+        assertTrue(keepHistorySlot[0])
+
+        // Second load: external URL with preserved path, history cleared
+        assertTrue(urlSlot[1].toString().startsWith("https://external.example.com"))
+        assertTrue(urlSlot[1].toString().contains("/history"))
+        assertTrue(urlSlot[1].toString().contains("start_date=2026-01-01"))
+        assertFalse(keepHistorySlot[1])
+
+        verify { webView.getCurrentWebViewRelativeUrl() }
+    }
+
+    @Test
     fun `Given IllegalStateException when getting session state then does not collect url flow`() = runTest {
         val server = mockk<Server>(relaxed = true)
 

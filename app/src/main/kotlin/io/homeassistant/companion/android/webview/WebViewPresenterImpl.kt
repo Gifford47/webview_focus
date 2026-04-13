@@ -161,7 +161,7 @@ class WebViewPresenterImpl @Inject constructor(
                 shouldConsumePath = effectiveRelativeUrl != null,
                 // Clear history when the base URL changes (e.g. internal <-> external)
                 // because old URLs in the back stack would be unreachable on the new network.
-                keepHistory = !(isNewServer || baseUrlChanged),
+                keepHistory = !isNewServer && !baseUrlChanged,
             )
         }
     }

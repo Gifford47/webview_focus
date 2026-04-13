@@ -14,10 +14,7 @@ import io.homeassistant.companion.android.util.hasSameOrigin
 fun resolveBackAction(webView: WebView, loadedUrl: Uri?): BackAction {
     val previousUrl = if (webView.canGoBack()) {
         val backForwardList = webView.copyBackForwardList()
-        backForwardList.currentIndex
-            .takeIf { it > 0 }
-            ?.let { backForwardList.getItemAtIndex(it - 1).url }
-            ?.toUri()
+        backForwardList.getItemAtIndex(backForwardList.currentIndex - 1).url.toUri()
     } else {
         null
     }

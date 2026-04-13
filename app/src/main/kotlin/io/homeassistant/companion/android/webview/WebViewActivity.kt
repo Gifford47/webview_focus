@@ -137,8 +137,8 @@ import io.homeassistant.companion.android.util.LifecycleHandler
 import io.homeassistant.companion.android.util.OnSwipeListener
 import io.homeassistant.companion.android.util.TLSWebViewClient
 import io.homeassistant.companion.android.util.applyInsets
-import io.homeassistant.companion.android.util.compose.webview.BackAction
 import io.homeassistant.companion.android.util.compose.webview.BLANK_URL
+import io.homeassistant.companion.android.util.compose.webview.BackAction
 import io.homeassistant.companion.android.util.compose.webview.resolveBackAction
 import io.homeassistant.companion.android.util.hasNonRootPath
 import io.homeassistant.companion.android.util.hasSameOrigin
@@ -668,9 +668,11 @@ class WebViewActivity :
                 override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
                     super.doUpdateVisitedHistory(view, url, isReload)
                     // Enable the callback when there's browser history OR when the
-                    // current URL has a non-root path, so pressing back navigates to
-                    // root before exiting. This keeps predictive back animations working
-                    // correctly on Android 14+.
+                    // current URL has a non-root path. Without the non-root check,
+                    // pressing back on e.g. /history with empty history would skip
+                    // the NavigateToRoot step and exit the app directly.
+                    // It also keeps predictive back animations working on Android 14+,
+                    // since the system needs to know upfront that we'll handle the gesture.
                     onBackPressed.isEnabled = canGoBack() ||
                         url?.toUri()?.hasNonRootPath() == true
                     presenter.stopScanningForImprov(false)
