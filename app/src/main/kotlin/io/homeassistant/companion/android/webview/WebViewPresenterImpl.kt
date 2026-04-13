@@ -137,19 +137,20 @@ class WebViewPresenterImpl @Inject constructor(
 
         serverManager.connectionStateProvider(serverId).urlFlow(isInternalOverride).collect { urlState ->
             val currentBaseUrl = (urlState as? UrlState.HasUrl)?.url
-            val baseUrlChanged = lastBaseUrl != null && currentBaseUrl != null && lastBaseUrl != currentBaseUrl
+            // baseUrlChanged is only true from the second emission onwards; the first emission
+            // establishes lastBaseUrl and is therefore not considered a change.
+            val baseUrlChanged = currentBaseUrl != null && lastBaseUrl?.let { it != currentBaseUrl } == true
             if (currentBaseUrl != null) lastBaseUrl = currentBaseUrl
 
             val effectiveRelativeUrl = if (!pathConsumed && path != null) {
                 pathConsumed = true
                 path
-            } else if (baseUrlChanged) {
-                // On internal/external URL switches, preserve the full relative URL
-                // (path + query params + fragment) so the user stays on the exact same
-                // page, including filtered views like history with date ranges.
-                // Only do this for connection type changes on the same server, not
-                // for server switches where the path may not exist and would leak
-                // information about the previous server.
+            } else if (baseUrlChanged && !isNewServer) {
+                // On internal/external URL switches on the same server, preserve the full
+                // relative URL (path + query params + fragment) so the user stays on the exact
+                // same page, including filtered views like history with date ranges.
+                // Skipped for server switches where the path may not exist and would leak
+                // navigation context from the previous server.
                 withContext(Dispatchers.Main) { view.getCurrentWebViewRelativeUrl() }
             } else {
                 null
