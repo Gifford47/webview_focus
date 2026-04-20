@@ -1601,7 +1601,6 @@ class WebViewActivity :
                         serverManager.getServer(presenter.getActiveServer())?.version?.isAtLeast(2025, 6, 0) == true
                     ) {
                         path = "/?more-info-entity-id=$entity"
-                        moreInfoEntity = ""
                     } else {
                         moreInfoEntity = entity
                     }
