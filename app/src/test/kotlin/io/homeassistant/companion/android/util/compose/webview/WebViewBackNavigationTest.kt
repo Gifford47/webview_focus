@@ -42,32 +42,23 @@ class WebViewBackNavigationTest {
     }
 
     @Test
-    fun `Given no history and sub-path loaded url when resolving back action then returns NavigateToRoot`() {
+    fun `Given no history and sub-path loaded url when resolving back action then returns None`() {
         val action = resolveBackAction(
             webViewWithoutHistory(),
             Uri.parse("https://ha.local:8123/history?external_auth=1"),
         )
 
-        assertTrue(action is BackAction.NavigateToRoot)
-        val rootUrl = (action as BackAction.NavigateToRoot).rootUrl
-        assertEquals("/", rootUrl.path)
-        assertEquals("1", rootUrl.getQueryParameter("external_auth"))
-        assertEquals("ha.local", rootUrl.host)
+        assertEquals(BackAction.None, action)
     }
 
     @Test
-    fun `Given sub-path loaded url with extra params when resolving back action then NavigateToRoot strips query and fragment`() {
+    fun `Given no history and sub-path loaded url with extra params when resolving back action then returns None`() {
         val action = resolveBackAction(
             webViewWithoutHistory(),
             Uri.parse("https://ha.local:8123/history?start_date=2026-01-01&external_auth=1#tab"),
         )
 
-        assertTrue(action is BackAction.NavigateToRoot)
-        val rootUrl = (action as BackAction.NavigateToRoot).rootUrl
-        assertEquals("/", rootUrl.path)
-        assertEquals("1", rootUrl.getQueryParameter("external_auth"))
-        assertEquals(null, rootUrl.getQueryParameter("start_date"))
-        assertEquals(null, rootUrl.fragment)
+        assertEquals(BackAction.None, action)
     }
 
     @Test
@@ -83,9 +74,27 @@ class WebViewBackNavigationTest {
     fun `Given cross-origin previous url and sub-path loaded url when resolving back action then returns NavigateToRoot`() {
         val webView = webViewWithHistory("https://other.server:8123/lovelace/0")
 
-        val action = resolveBackAction(webView, Uri.parse("https://ha.local:8123/history?external_auth=1"))
+        val action = resolveBackAction(
+            webView,
+            Uri.parse("https://ha.local:8123/history?start_date=2026-01-01&external_auth=1#tab"),
+        )
 
         assertTrue(action is BackAction.NavigateToRoot)
+        val rootUrl = (action as BackAction.NavigateToRoot).rootUrl
+        assertEquals("/", rootUrl.path)
+        assertEquals("ha.local", rootUrl.host)
+        assertEquals("1", rootUrl.getQueryParameter("external_auth"))
+        assertEquals(null, rootUrl.getQueryParameter("start_date"))
+        assertEquals(null, rootUrl.fragment)
+    }
+
+    @Test
+    fun `Given cross-origin previous url and root loaded url when resolving back action then returns None`() {
+        val webView = webViewWithHistory("https://other.server:8123/lovelace/0")
+
+        val action = resolveBackAction(webView, Uri.parse("https://ha.local:8123/?external_auth=1"))
+
+        assertEquals(BackAction.None, action)
     }
 
     @Test

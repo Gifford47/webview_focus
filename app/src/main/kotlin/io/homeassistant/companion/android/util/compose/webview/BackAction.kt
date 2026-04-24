@@ -13,10 +13,12 @@ import io.homeassistant.companion.android.util.hasSameOrigin
  * The resolution logic:
  * 1. If the previous back-stack entry is a same-origin HTTP URL, returns
  *    [BackAction.GoBack] so the user can navigate back normally.
- * 2. If there is no valid previous URL and the current URL has a non-root path,
- *    returns [BackAction.NavigateToRoot] so the user is taken to the home page first.
+ * 2. If there is a previous back-stack entry that is not same-origin HTTP and
+ *    the current URL has a non-root path, returns [BackAction.NavigateToRoot]
+ *    so the user is taken to the home page first.
  * 3. Otherwise returns [BackAction.None] — the caller decides what to do
- *    (e.g. exit the activity or pop the navigation stack).
+ *    (e.g. exit the activity, pop the navigation stack, or let the system
+ *    handle back to show the predictive-back animation).
  *
  * @param webView the WebView whose back/forward list is inspected
  * @param loadedUrl the current URL shown in the WebView (as tracked by the caller,
@@ -46,7 +48,7 @@ private fun resolveBackAction(previousUrl: Uri?, loadedUrl: Uri?): BackAction {
         return BackAction.GoBack
     }
 
-    if (loadedUrl != null && loadedUrl.hasNonRootPath()) {
+    if (previousUrl != null && loadedUrl != null && loadedUrl.hasNonRootPath()) {
         val rootUrl = loadedUrl.buildUpon()
             .path("/")
             .clearQuery()
