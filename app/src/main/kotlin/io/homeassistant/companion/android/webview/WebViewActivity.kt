@@ -14,8 +14,6 @@ import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.os.Handler
-import android.os.Looper
 import android.text.method.HideReturnsTransformationMethod
 import android.text.method.PasswordTransformationMethod
 import android.util.DisplayMetrics
@@ -1998,19 +1996,17 @@ class WebViewActivity :
             Timber.i("Fragments ${supportFragmentManager.fragments} displayed, skipping connection wait")
         } else {
             Timber.d("Waiting for loadedUrl ${sensitive(loadedUrl.toString())}")
-            Handler(Looper.getMainLooper()).postDelayed(
-                {
-                    val firstSegment = loadedUrl?.pathSegments?.firstOrNull().orEmpty()
-                    if (
-                        !isConnected &&
-                        !firstSegment.contains("api") &&
-                        !firstSegment.contains("local")
-                    ) {
-                        showError(errorType = ErrorType.TIMEOUT_EXTERNAL_BUS)
-                    }
-                },
-                CONNECTION_DELAY,
-            )
+            lifecycleScope.launch {
+                delay(CONNECTION_DELAY)
+                val firstSegment = loadedUrl?.pathSegments?.firstOrNull().orEmpty()
+                if (
+                    !isConnected &&
+                    !firstSegment.contains("api") &&
+                    !firstSegment.contains("local")
+                ) {
+                    showError(errorType = ErrorType.TIMEOUT_EXTERNAL_BUS)
+                }
+            }
         }
     }
 
