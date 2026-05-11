@@ -38,6 +38,7 @@ internal fun NavGraphBuilder.connectionScreen(
 
         ConnectionScreen(
             viewModel = viewModel,
+            onBackClick = onBackClick,
         )
 
         ConnectionErrorScreen(

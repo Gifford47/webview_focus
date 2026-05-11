@@ -1,7 +1,6 @@
 package io.homeassistant.companion.android.onboarding.connection
 
 import android.webkit.WebViewClient
-import androidx.activity.compose.BackHandler
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -40,6 +39,7 @@ class ConnectionScreenTest {
         composeTestRule.apply {
             setContent {
                 ConnectionScreen(
+                    onBackClick = {},
                     isLoading = false,
                     isError = false,
                     canGoBack = false,
@@ -57,6 +57,7 @@ class ConnectionScreenTest {
         composeTestRule.apply {
             setContent {
                 ConnectionScreen(
+                    onBackClick = {},
                     isLoading = true,
                     isError = false,
                     canGoBack = false,
@@ -75,6 +76,7 @@ class ConnectionScreenTest {
         composeTestRule.apply {
             setContent {
                 ConnectionScreen(
+                    onBackClick = {},
                     isLoading = false,
                     isError = false,
                     canGoBack = false,
@@ -93,6 +95,7 @@ class ConnectionScreenTest {
         composeTestRule.apply {
             setContent {
                 ConnectionScreen(
+                    onBackClick = {},
                     isLoading = false,
                     isError = true,
                     canGoBack = false,
@@ -108,14 +111,14 @@ class ConnectionScreenTest {
     }
 
     @Test
-    fun `Given canGoBack is false when pressing back then BackHandler does not consume event`() {
-        var outerCallbackInvoked = false
+    fun `Given ConnectionScreen when pressing back then triggers onBackClick`() {
+        var backPressed = false
         composeTestRule.apply {
             setContent {
-                BackHandler(enabled = true) {
-                    outerCallbackInvoked = true
-                }
                 ConnectionScreen(
+                    onBackClick = {
+                        backPressed = true
+                    },
                     isLoading = false,
                     isError = false,
                     canGoBack = false,
@@ -127,10 +130,7 @@ class ConnectionScreenTest {
 
             activity.onBackPressedDispatcher.onBackPressed()
 
-            // With canGoBack=false the screen's internal BackHandler is disabled,
-            // so the gesture propagates to the outer handler — this is the contract
-            // that enables Android 14+ predictive-back peek animations.
-            assertTrue(outerCallbackInvoked)
+            assertTrue(backPressed)
         }
     }
 }

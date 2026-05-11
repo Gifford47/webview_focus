@@ -40,7 +40,7 @@ const val CONNECTION_SCREEN_ERROR_PLACEHOLDER_TAG = "connection_screen_error"
 private val ICON_SIZE = 64.dp
 
 @Composable
-internal fun ConnectionScreen(viewModel: ConnectionViewModel, modifier: Modifier = Modifier) {
+internal fun ConnectionScreen(onBackClick: () -> Unit, viewModel: ConnectionViewModel, modifier: Modifier = Modifier) {
     val url by viewModel.urlFlow.collectAsState()
     val isLoading by viewModel.isLoadingFlow.collectAsState()
     val error by viewModel.errorFlow.collectAsState()
@@ -53,6 +53,7 @@ internal fun ConnectionScreen(viewModel: ConnectionViewModel, modifier: Modifier
         isError = isError,
         canGoBack = canGoBack,
         webViewClient = viewModel.webViewClient,
+        onBackClick = onBackClick,
         onWebViewCreationFailed = viewModel::onWebViewCreationFailed,
         modifier = modifier,
     )
@@ -65,6 +66,7 @@ internal fun ConnectionScreen(
     isError: Boolean,
     canGoBack: Boolean,
     webViewClient: WebViewClient,
+    onBackClick: () -> Unit,
     onWebViewCreationFailed: (Throwable) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -88,6 +90,7 @@ internal fun ConnectionScreen(
                         loadUrl(url)
                     },
                     canGoBack = canGoBack,
+                    onBackPressed = onBackClick,
                     onWebViewCreationFailed = onWebViewCreationFailed,
                 )
             } ?: Timber.i("ConnectionScreen: url is null")
@@ -129,6 +132,7 @@ private fun ConnectionScreenPreview() {
             isError = false,
             canGoBack = false,
             webViewClient = WebViewClient(),
+            onBackClick = {},
             onWebViewCreationFailed = {},
             modifier = Modifier.fillMaxSize(),
         )

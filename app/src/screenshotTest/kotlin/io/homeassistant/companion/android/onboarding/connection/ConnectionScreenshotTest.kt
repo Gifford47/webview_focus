@@ -19,6 +19,7 @@ class ConnectionScreenshotTest {
                 isError = false,
                 canGoBack = false,
                 webViewClient = WebViewClient(),
+                onBackClick = {},
                 onWebViewCreationFailed = {},
             )
         }
@@ -35,6 +36,7 @@ class ConnectionScreenshotTest {
                 isError = false,
                 canGoBack = false,
                 webViewClient = WebViewClient(),
+                onBackClick = {},
                 onWebViewCreationFailed = {},
             )
         }
@@ -51,6 +53,7 @@ class ConnectionScreenshotTest {
                 isError = true,
                 canGoBack = false,
                 webViewClient = WebViewClient(),
+                onBackClick = {},
                 onWebViewCreationFailed = {},
             )
         }
