@@ -17,8 +17,8 @@ class ConnectionScreenshotTest {
                 url = "https://www.example.com",
                 isLoading = true,
                 isError = false,
+                canGoBack = false,
                 webViewClient = WebViewClient(),
-                onBackClick = {},
                 onWebViewCreationFailed = {},
             )
         }
@@ -33,8 +33,8 @@ class ConnectionScreenshotTest {
                 url = "https://www.example.com",
                 isLoading = false,
                 isError = false,
+                canGoBack = false,
                 webViewClient = WebViewClient(),
-                onBackClick = {},
                 onWebViewCreationFailed = {},
             )
         }
@@ -49,8 +49,8 @@ class ConnectionScreenshotTest {
                 url = "https://www.example.com",
                 isLoading = false,
                 isError = true,
+                canGoBack = false,
                 webViewClient = WebViewClient(),
-                onBackClick = {},
                 onWebViewCreationFailed = {},
             )
         }

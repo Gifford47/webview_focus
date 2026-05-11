@@ -398,8 +398,8 @@ class FrontendScreenTest {
         setContent {
             val content: @Composable () -> Unit = {
                 FrontendScreenContent(
-                    onBackClick = {},
                     viewState = viewState,
+                    canGoBack = false,
                     webViewClient = WebViewClient(),
                     webChromeClient = WebChromeClient(),
                     frontendJsCallback = FrontendJsBridge.noOp,
@@ -443,12 +443,12 @@ class FrontendScreenTest {
         composeTestRule.apply {
             setContent {
                 FrontendScreenContent(
-                    onBackClick = {},
                     viewState = FrontendViewState.Error(
                         serverId = 1,
                         url = "https://example.com",
                         error = error,
                     ),
+                    canGoBack = false,
                     errorStateProvider = FakeConnectionErrorStateProvider(
                         url = "https://example.com",
                         error = error,
@@ -489,7 +489,6 @@ class FrontendScreenTest {
         composeTestRule.setContent {
             val context = LocalContext.current
             FrontendScreenContent(
-                onBackClick = {},
                 viewState = FrontendViewState.Content(
                     serverId = 1,
                     url = "https://example.com",
@@ -498,6 +497,7 @@ class FrontendScreenTest {
                 webViewClient = WebViewClient(),
                 webChromeClient = WebChromeClient(),
                 frontendJsCallback = FrontendJsBridge.noOp,
+                canGoBack = false,
                 onBlockInsecureRetry = {},
                 onOpenExternalLink = {},
                 onBlockInsecureHelpClick = {},

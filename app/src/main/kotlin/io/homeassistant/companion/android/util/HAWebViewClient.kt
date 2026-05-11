@@ -37,6 +37,11 @@ class HAWebViewClientFactory @Inject constructor(@NamedKeyChain private val keyC
      *        Receives the URI and whether TLS client auth was required.
      *        Return `true` to prevent WebView from loading the URL.
      * @param onPageFinished Optional callback when a page finishes loading.
+     * @param onCanGoBackChanged Optional callback invoked whenever the WebView's
+     *        back-stack state changes (page navigations, SPA history updates).
+     *        Receives [WebView.canGoBack]. Callers can hoist this into a state
+     *        holder to drive a back handler's enabled-state for Android 14+
+     *        predictive-back support.
      * @param onReceivedHttpAuthRequest Optional callback when the server requests HTTP Basic Auth.
      *        Receives the handler, host, the resource URL that triggered the request, and the realm.
      */
@@ -46,6 +51,7 @@ class HAWebViewClientFactory @Inject constructor(@NamedKeyChain private val keyC
         onCrash: (() -> Unit)? = null,
         onUrlIntercepted: ((uri: Uri, isTLSClientAuthNeeded: Boolean) -> Boolean)? = null,
         onPageFinished: (() -> Unit)? = null,
+        onCanGoBackChanged: ((Boolean) -> Unit)? = null,
         onReceivedHttpAuthRequest: (
             (
                 handler: HttpAuthHandler,
@@ -62,6 +68,7 @@ class HAWebViewClientFactory @Inject constructor(@NamedKeyChain private val keyC
             onCrash = onCrash,
             onUrlIntercepted = onUrlIntercepted,
             onPageFinished = onPageFinished,
+            onCanGoBackChanged = onCanGoBackChanged,
             onReceivedHttpAuthRequest = onReceivedHttpAuthRequest,
         )
     }
@@ -80,6 +87,7 @@ class HAWebViewClient internal constructor(
     private val onCrash: (() -> Unit)?,
     private val onUrlIntercepted: ((uri: Uri, isTLSClientAuthNeeded: Boolean) -> Boolean)?,
     private val onPageFinished: (() -> Unit)?,
+    private val onCanGoBackChanged: ((Boolean) -> Unit)?,
     private val onReceivedHttpAuthRequest: (
         (handler: HttpAuthHandler, host: String, resource: String, realm: String) -> Unit
     )?,
@@ -96,6 +104,17 @@ class HAWebViewClient internal constructor(
     override fun onPageFinished(view: WebView?, url: String?) {
         super.onPageFinished(view, url)
         onPageFinished?.invoke()
+        notifyCanGoBack(view)
+    }
+
+    override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+        super.doUpdateVisitedHistory(view, url, isReload)
+        // SPA navigations (history.pushState) only surface here, not in onPageFinished.
+        notifyCanGoBack(view)
+    }
+
+    private fun notifyCanGoBack(view: WebView?) {
+        onCanGoBackChanged?.invoke(view?.canGoBack() == true)
     }
 
     override fun onReceivedHttpAuthRequest(view: WebView?, handler: HttpAuthHandler?, host: String?, realm: String?) {
