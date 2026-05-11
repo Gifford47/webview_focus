@@ -96,6 +96,44 @@ class HAWebViewClientTest {
     }
 
     @Test
+    fun `Given transition from blank to content url when onPageFinished then clears webView history`() {
+        val webView = mockk<WebView>(relaxUnitFun = true) {
+            every { canGoBack() } returns true
+        }
+
+        // First load: about:blank
+        webViewClient.onPageFinished(webView, "about:blank")
+        // Then transition to real content URL
+        webViewClient.onPageFinished(webView, "http://homeassistant.local:8123/")
+
+        io.mockk.verify(exactly = 1) { webView.clearHistory() }
+    }
+
+    @Test
+    fun `Given content url to content url when onPageFinished then does not clear history`() {
+        val webView = mockk<WebView>(relaxUnitFun = true) {
+            every { canGoBack() } returns true
+        }
+
+        webViewClient.onPageFinished(webView, "http://homeassistant.local:8123/")
+        webViewClient.onPageFinished(webView, "http://homeassistant.local:8123/history")
+
+        io.mockk.verify(exactly = 0) { webView.clearHistory() }
+    }
+
+    @Test
+    fun `Given content url to blank url when onPageFinished then does not clear history`() {
+        val webView = mockk<WebView>(relaxUnitFun = true) {
+            every { canGoBack() } returns false
+        }
+
+        webViewClient.onPageFinished(webView, "http://homeassistant.local:8123/")
+        webViewClient.onPageFinished(webView, "about:blank")
+
+        io.mockk.verify(exactly = 0) { webView.clearHistory() }
+    }
+
+    @Test
     fun `Given SSL_DATE_INVALID error when onReceivedSslError then emits AuthenticationError`() {
         testSslError(SslError.SSL_DATE_INVALID, commonR.string.webview_error_SSL_DATE_INVALID)
     }
