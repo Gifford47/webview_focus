@@ -40,18 +40,19 @@ const val CONNECTION_SCREEN_ERROR_PLACEHOLDER_TAG = "connection_screen_error"
 private val ICON_SIZE = 64.dp
 
 @Composable
-internal fun ConnectionScreen(onBackClick: () -> Unit, viewModel: ConnectionViewModel, modifier: Modifier = Modifier) {
+internal fun ConnectionScreen(viewModel: ConnectionViewModel, modifier: Modifier = Modifier) {
     val url by viewModel.urlFlow.collectAsState()
     val isLoading by viewModel.isLoadingFlow.collectAsState()
     val error by viewModel.errorFlow.collectAsState()
+    val canGoBack by viewModel.canGoBack.collectAsState()
     val isError = error != null
 
     ConnectionScreen(
         url = url,
         isLoading = isLoading,
         isError = isError,
+        canGoBack = canGoBack,
         webViewClient = viewModel.webViewClient,
-        onBackClick = onBackClick,
         onWebViewCreationFailed = viewModel::onWebViewCreationFailed,
         modifier = modifier,
     )
@@ -62,8 +63,8 @@ internal fun ConnectionScreen(
     url: String?,
     isLoading: Boolean,
     isError: Boolean,
+    canGoBack: Boolean,
     webViewClient: WebViewClient,
-    onBackClick: () -> Unit,
     onWebViewCreationFailed: (Throwable) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -86,7 +87,7 @@ internal fun ConnectionScreen(
                         this.webViewClient = webViewClient
                         loadUrl(url)
                     },
-                    onBackPressed = onBackClick,
+                    canGoBack = canGoBack,
                     onWebViewCreationFailed = onWebViewCreationFailed,
                 )
             } ?: Timber.i("ConnectionScreen: url is null")
@@ -126,8 +127,8 @@ private fun ConnectionScreenPreview() {
             url = "https://www.home-assistant.io",
             isLoading = false,
             isError = false,
+            canGoBack = false,
             webViewClient = WebViewClient(),
-            onBackClick = {},
             onWebViewCreationFailed = {},
             modifier = Modifier.fillMaxSize(),
         )

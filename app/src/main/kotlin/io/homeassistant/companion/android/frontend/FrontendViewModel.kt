@@ -165,11 +165,21 @@ internal class FrontendViewModel @VisibleForTesting constructor(
         scope = viewModelScope,
     )
 
+    private val _canGoBack = MutableStateFlow(false)
+
+    /**
+     * Whether the WebView has a non-empty back history. Used by the UI layer
+     * to gate its `BackHandler`; when `false`, the system can handle the back
+     * gesture and show the Android 14+ predictive-back peek animation.
+     */
+    val canGoBack: StateFlow<Boolean> = _canGoBack.asStateFlow()
+
     val webViewClient: HAWebViewClient = webViewClientFactory.create(
         currentUrlFlow = urlFlow,
         onFrontendError = ::onError,
         frontendJsCallback = frontendJsCallback,
         onCrash = ::onRetry,
+        onCanGoBackChanged = { _canGoBack.value = it },
     )
 
     val webChromeClient: HAWebChromeClient = HAWebChromeClient(

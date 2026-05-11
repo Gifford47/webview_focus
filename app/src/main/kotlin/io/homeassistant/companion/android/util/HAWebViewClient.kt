@@ -40,6 +40,11 @@ class HAWebViewClientFactory @Inject constructor(@NamedKeyChain private val keyC
      *        Receives the URI and whether TLS client auth was required.
      *        Return `true` to prevent WebView from loading the URL.
      * @param onPageFinished Optional callback when a page finishes loading.
+     * @param onCanGoBackChanged Optional callback invoked whenever the WebView's
+     *        back-stack state changes (page navigations, SPA history updates).
+     *        Receives [WebView.canGoBack]. Callers can hoist this into a state
+     *        holder to drive a back handler's enabled-state for Android 14+
+     *        predictive-back support.
      */
     fun create(
         currentUrlFlow: StateFlow<String?>,
@@ -48,6 +53,7 @@ class HAWebViewClientFactory @Inject constructor(@NamedKeyChain private val keyC
         onCrash: (() -> Unit)? = null,
         onUrlIntercepted: ((uri: Uri, isTLSClientAuthNeeded: Boolean) -> Boolean)? = null,
         onPageFinished: (() -> Unit)? = null,
+        onCanGoBackChanged: ((Boolean) -> Unit)? = null,
     ): HAWebViewClient {
         return HAWebViewClient(
             keyChainRepository = keyChainRepository,
@@ -57,6 +63,7 @@ class HAWebViewClientFactory @Inject constructor(@NamedKeyChain private val keyC
             onCrash = onCrash,
             onUrlIntercepted = onUrlIntercepted,
             onPageFinished = onPageFinished,
+            onCanGoBackChanged = onCanGoBackChanged,
         )
     }
 }
@@ -75,11 +82,23 @@ class HAWebViewClient internal constructor(
     private val onCrash: (() -> Unit)?,
     private val onUrlIntercepted: ((uri: Uri, isTLSClientAuthNeeded: Boolean) -> Boolean)?,
     private val onPageFinished: (() -> Unit)?,
+    private val onCanGoBackChanged: ((Boolean) -> Unit)?,
 ) : TLSWebViewClient(keyChainRepository) {
 
     override fun onPageFinished(view: WebView?, url: String?) {
         super.onPageFinished(view, url)
         onPageFinished?.invoke()
+        notifyCanGoBack(view)
+    }
+
+    override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+        super.doUpdateVisitedHistory(view, url, isReload)
+        // SPA navigations (history.pushState) only surface here, not in onPageFinished.
+        notifyCanGoBack(view)
+    }
+
+    private fun notifyCanGoBack(view: WebView?) {
+        onCanGoBackChanged?.invoke(view?.canGoBack() == true)
     }
 
     override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {

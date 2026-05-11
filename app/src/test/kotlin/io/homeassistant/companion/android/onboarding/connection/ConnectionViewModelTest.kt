@@ -62,6 +62,7 @@ class ConnectionViewModelTest {
                 onCrash = any(),
                 onUrlIntercepted = any(),
                 onPageFinished = any(),
+                onCanGoBackChanged = any(),
             )
         } answers {
             HAWebViewClient(
@@ -72,6 +73,7 @@ class ConnectionViewModelTest {
                 onCrash = arg(3),
                 onUrlIntercepted = arg(4),
                 onPageFinished = arg(5),
+                onCanGoBackChanged = arg(6),
             )
         }
     }
@@ -104,7 +106,7 @@ class ConnectionViewModelTest {
 
             assertEquals(expectedAuthUrl, urlFlow.awaitItem())
 
-            viewModel.webViewClient.onPageFinished(mockk(), null)
+            viewModel.webViewClient.onPageFinished(mockk(relaxed = true), null)
 
             assertFalse(isLoadingFlow.awaitItem())
             errorFlow.expectNoEvents()

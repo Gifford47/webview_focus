@@ -667,14 +667,11 @@ class WebViewActivity :
 
                 override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
                     super.doUpdateVisitedHistory(view, url, isReload)
-                    // Enable the callback when there's browser history OR when the
-                    // current URL has a non-root path. Without the non-root check,
-                    // pressing back on e.g. /history with empty history would skip
-                    // the NavigateToRoot step and exit the app directly.
-                    // It also keeps predictive back animations working on Android 14+,
-                    // since the system needs to know upfront that we'll handle the gesture.
-                    onBackPressed.isEnabled = canGoBack() ||
-                        url?.toUri()?.hasNonRootPath() == true
+                    // Enable the callback only when there's browser history. On a fresh
+                    // load (e.g. deeplink to a sub-path) the callback stays disabled so
+                    // the system can handle the gesture and show the Android 14+
+                    // predictive-back peek animation.
+                    onBackPressed.isEnabled = canGoBack()
                     presenter.stopScanningForImprov(false)
                 }
             }
