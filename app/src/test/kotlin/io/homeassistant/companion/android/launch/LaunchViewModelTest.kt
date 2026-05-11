@@ -2,10 +2,12 @@ package io.homeassistant.companion.android.launch
 
 import androidx.work.OneTimeWorkRequest
 import androidx.work.WorkManager
+import io.homeassistant.companion.android.applock.AppLockStateManager
 import io.homeassistant.companion.android.automotive.navigation.AutomotiveRoute
 import io.homeassistant.companion.android.common.data.authentication.SessionState
 import io.homeassistant.companion.android.common.data.network.NetworkState
 import io.homeassistant.companion.android.common.data.network.NetworkStatusMonitor
+import io.homeassistant.companion.android.common.data.prefs.PrefsRepository
 import io.homeassistant.companion.android.common.data.servers.ServerManager
 import io.homeassistant.companion.android.database.server.Server
 import io.homeassistant.companion.android.database.server.ServerConnectionInfo
@@ -33,14 +35,20 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.EnumSource
+import org.junit.jupiter.params.provider.ValueSource
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @ExtendWith(MainDispatcherJUnit5Extension::class, ConsoleLogExtension::class)
 class LaunchViewModelTest {
     private val serverManager: ServerManager = mockk(relaxed = true)
     private val networkStatusMonitor: NetworkStatusMonitor = mockk(relaxed = true)
+    private val fullScreenEnabledFlow = MutableStateFlow(false)
+    private val prefsRepository: PrefsRepository = mockk(relaxed = true) {
+        coEvery { this@mockk.fullScreenEnabledFlow() } returns this@LaunchViewModelTest.fullScreenEnabledFlow
+    }
 
     private val workManager: WorkManager = mockk()
+    private val appLockStateManager: AppLockStateManager = mockk(relaxed = true)
 
     private lateinit var viewModel: LaunchViewModel
 
@@ -55,6 +63,8 @@ class LaunchViewModelTest {
             workManager,
             serverManager,
             networkStatusMonitor,
+            prefsRepository,
+            appLockStateManager,
             hasLocationTrackingSupport,
             isAutomotive,
             isFullFlavor,
@@ -543,5 +553,127 @@ class LaunchViewModelTest {
             LaunchUiState.Ready(WearOnboardingRoute(wearName = "Pixel Watch", urlToOnboard = null)),
             viewModel.uiState.value,
         )
+    }
+
+    @Test
+    fun `Given fullscreen enabled when observed then isFullScreen is true`() = runTest {
+        fullScreenEnabledFlow.value = true
+        createViewModel()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.isFullScreen.value)
+    }
+
+    @Test
+    fun `Given fullscreen disabled when observed then isFullScreen is false`() = runTest {
+        fullScreenEnabledFlow.value = false
+        createViewModel()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.isFullScreen.value)
+    }
+
+    @Test
+    fun `Given fullscreen preference changes then isFullScreen updates reactively`() = runTest {
+        fullScreenEnabledFlow.value = false
+        createViewModel()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.isFullScreen.value)
+
+        fullScreenEnabledFlow.value = true
+        advanceUntilIdle()
+
+        assertTrue(viewModel.isFullScreen.value)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun `Given refreshAppLockState when manager reports lock state then isAppLocked reflects it`(
+        locked: Boolean,
+    ) = runTest {
+        coEvery { appLockStateManager.isAppLocked() } returns locked
+        createViewModel()
+
+        viewModel.refreshAppLockState()
+        advanceUntilIdle()
+
+        assertEquals(locked, viewModel.isAppLocked.value)
+    }
+
+    @Test
+    fun `Given onAppPaused when invoked then manager is told app is inactive`() = runTest {
+        createViewModel()
+
+        viewModel.onAppPaused()
+        advanceUntilIdle()
+
+        coVerify { appLockStateManager.setAppActive(active = false) }
+    }
+
+    @Test
+    fun `Given onAuthenticated when invoked then manager is told app is active and isAppLocked is false`() = runTest {
+        coEvery { appLockStateManager.isAppLocked() } returns true
+        createViewModel()
+        viewModel.refreshAppLockState()
+        advanceUntilIdle()
+        assertTrue(viewModel.isAppLocked.value)
+
+        viewModel.onAuthenticated()
+        advanceUntilIdle()
+
+        coVerify { appLockStateManager.setAppActive(active = true) }
+        assertFalse(viewModel.isAppLocked.value)
+    }
+
+    @Test
+    fun `Given fullscreen preference off when fullscreen is requested then isFullScreen is true`() = runTest {
+        fullScreenEnabledFlow.value = false
+        createViewModel()
+        advanceUntilIdle()
+
+        viewModel.onFullscreenRequested(fullscreen = true)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.isFullScreen.value)
+    }
+
+    @Test
+    fun `Given fullscreen preference off when fullscreen request is cleared then isFullScreen is false`() = runTest {
+        fullScreenEnabledFlow.value = false
+        createViewModel()
+        viewModel.onFullscreenRequested(fullscreen = true)
+        advanceUntilIdle()
+
+        viewModel.onFullscreenRequested(fullscreen = false)
+        advanceUntilIdle()
+
+        assertFalse(viewModel.isFullScreen.value)
+    }
+
+    @Test
+    fun `Given fullscreen preference on when fullscreen request is cleared then isFullScreen stays true`() = runTest {
+        fullScreenEnabledFlow.value = true
+        createViewModel()
+        viewModel.onFullscreenRequested(fullscreen = true)
+        advanceUntilIdle()
+
+        viewModel.onFullscreenRequested(fullscreen = false)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.isFullScreen.value)
+    }
+
+    @Test
+    fun `Given fullscreen request is active when preference turns off then isFullScreen stays true`() = runTest {
+        fullScreenEnabledFlow.value = true
+        createViewModel()
+        viewModel.onFullscreenRequested(fullscreen = true)
+        advanceUntilIdle()
+
+        fullScreenEnabledFlow.value = false
+        advanceUntilIdle()
+
+        assertTrue(viewModel.isFullScreen.value)
     }
 }

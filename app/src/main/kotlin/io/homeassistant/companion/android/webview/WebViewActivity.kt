@@ -14,8 +14,6 @@ import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.os.Handler
-import android.os.Looper
 import android.text.method.HideReturnsTransformationMethod
 import android.text.method.PasswordTransformationMethod
 import android.util.DisplayMetrics
@@ -43,7 +41,6 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.OptIn
 import androidx.appcompat.app.AlertDialog
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
@@ -92,6 +89,7 @@ import io.homeassistant.companion.android.BuildConfig
 import io.homeassistant.companion.android.R
 import io.homeassistant.companion.android.assist.AssistActivity
 import io.homeassistant.companion.android.authenticator.Authenticator
+import io.homeassistant.companion.android.authenticator.Authenticator.Companion.AuthenticationResult
 import io.homeassistant.companion.android.barcode.BarcodeScannerActivity
 import io.homeassistant.companion.android.common.R as commonR
 import io.homeassistant.companion.android.common.data.keychain.KeyChainRepository
@@ -99,12 +97,13 @@ import io.homeassistant.companion.android.common.data.keychain.NamedKeyChain
 import io.homeassistant.companion.android.common.data.prefs.NightModeTheme
 import io.homeassistant.companion.android.common.data.servers.ServerManager
 import io.homeassistant.companion.android.common.util.AppVersionProvider
-import io.homeassistant.companion.android.common.util.DisabledLocationHandler
 import io.homeassistant.companion.android.common.util.FailFast
 import io.homeassistant.companion.android.common.util.GestureAction
 import io.homeassistant.companion.android.common.util.GestureDirection
 import io.homeassistant.companion.android.common.util.getBooleanOrElse
 import io.homeassistant.companion.android.common.util.getBooleanOrNull
+import io.homeassistant.companion.android.common.util.getDoubleOrElse
+import io.homeassistant.companion.android.common.util.getDoubleOrNull
 import io.homeassistant.companion.android.common.util.getIntOrElse
 import io.homeassistant.companion.android.common.util.getIntOrNull
 import io.homeassistant.companion.android.common.util.getStringOrElse
@@ -119,8 +118,15 @@ import io.homeassistant.companion.android.database.authentication.Authentication
 import io.homeassistant.companion.android.database.authentication.AuthenticationDao
 import io.homeassistant.companion.android.database.server.ServerConnectionInfo
 import io.homeassistant.companion.android.databinding.DialogAuthenticationBinding
+import io.homeassistant.companion.android.frontend.EvaluateJavascriptUsage
 import io.homeassistant.companion.android.frontend.externalbus.incoming.HapticType
 import io.homeassistant.companion.android.frontend.haptic.HapticFeedbackPerformer
+import io.homeassistant.companion.android.frontend.js.FrontendJsBridge.Companion.EXPECTED_GET_AUTH_CALLBACK
+import io.homeassistant.companion.android.frontend.js.FrontendJsBridge.Companion.EXPECTED_REVOKE_AUTH_CALLBACK
+import io.homeassistant.companion.android.frontend.js.FrontendJsBridge.Companion.EXTERNAL_APP_V1
+import io.homeassistant.companion.android.frontend.js.FrontendJsBridge.Companion.EXTERNAL_APP_V2_LISTENER
+import io.homeassistant.companion.android.frontend.js.FrontendJsBridge.Companion.externalBusCallback
+import io.homeassistant.companion.android.frontend.js.FrontendJsBridge.Companion.isServerSupportingExternalAppV2
 import io.homeassistant.companion.android.improv.ui.ImprovPermissionDialog
 import io.homeassistant.companion.android.improv.ui.ImprovSetupDialog
 import io.homeassistant.companion.android.launch.LaunchActivity
@@ -132,6 +138,7 @@ import io.homeassistant.companion.android.settings.SettingsActivity
 import io.homeassistant.companion.android.settings.server.ServerChooserFragment
 import io.homeassistant.companion.android.themes.NightModeManager
 import io.homeassistant.companion.android.util.ChangeLog
+import io.homeassistant.companion.android.util.CheckLocationDisabledUseCase
 import io.homeassistant.companion.android.util.DataUriDownloadManager
 import io.homeassistant.companion.android.util.LifecycleHandler
 import io.homeassistant.companion.android.util.OnSwipeListener
@@ -177,18 +184,6 @@ class WebViewActivity :
         const val EXTRA_PATH = "path"
         const val EXTRA_SERVER = "server"
         const val EXTRA_SHOW_WHEN_LOCKED = "show_when_locked"
-
-        private const val EXTERNAL_APP_V1 = "externalApp"
-        private const val EXTERNAL_APP_V2_LISTENER = "externalAppV2"
-
-        /**
-         * Expected callback names for external authentication.
-         *
-         * The frontend sends a dynamic callback name in its requests, but the app
-         * only allows these hardcoded values.
-         */
-        private const val GET_AUTH_CALLBACK = "externalAuthSetToken"
-        private const val REVOKE_AUTH_CALLBACK = "externalAuthRevokeToken"
 
         private const val APP_PREFIX = "app://"
         private const val INTENT_PREFIX = "intent:"
@@ -268,6 +263,12 @@ class WebViewActivity :
 
     @Inject
     lateinit var entityAddToHandler: EntityAddToHandler
+
+    @Inject
+    lateinit var dataUriDownloadManager: DataUriDownloadManager
+
+    @Inject
+    lateinit var checkLocationDisabled: CheckLocationDisabledUseCase
 
     @Inject
     lateinit var dataSourceFactory: DataSource.Factory
@@ -452,7 +453,7 @@ class WebViewActivity :
             )
         }
 
-        authenticator = Authenticator(this, this, ::authenticationResult)
+        authenticator = Authenticator(this, ::authenticationResult)
 
         decor = window.decorView as FrameLayout
 
@@ -546,6 +547,13 @@ class WebViewActivity :
                             if (moreInfoMutex.tryLock(owner)) {
                                 delay(2000L)
                                 Timber.d("More info entity: $moreInfoEntity")
+                                // Opts into [EvaluateJavascriptUsage] to open the "more-info" dialog
+                                // for an entity (e.g. from a notification deep-link) by dispatching
+                                // a `hass-more-info` CustomEvent on the `home-assistant` root. This
+                                // is a legacy fallback for frontends that don't support the
+                                // `?more-info-entity-id=` URL parameter (see where moreInfoEntity
+                                // is assigned). Kept for backward compatibility.
+                                @OptIn(EvaluateJavascriptUsage::class)
                                 webView.evaluateJavascript(
                                     "document.querySelector(\"home-assistant\").dispatchEvent(new CustomEvent(\"hass-more-info\", { detail: { entityId: \"$moreInfoEntity\" }}))",
                                 ) {
@@ -894,7 +902,9 @@ class WebViewActivity :
      */
     @SuppressLint("RequiresFeature")
     private suspend fun webViewAddJavascriptInterface() {
-        if (isServerSupportingExternalAppV2() &&
+        val isServerSupportingExternalAppV2 =
+            serverManager.getServer(presenter.getActiveServer()).isServerSupportingExternalAppV2()
+        if (isServerSupportingExternalAppV2 &&
             WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
         ) {
             webView.removeJavascriptInterface(EXTERNAL_APP_V1)
@@ -990,34 +1000,38 @@ class WebViewActivity :
     /**
      * Validates and handles a `getExternalAuth` request from either V1 or V2 bridge.
      *
-     * Rejects requests whose callback name does not match the expected [GET_AUTH_CALLBACK].
+     * Rejects requests whose callback name does not match the expected [EXPECTED_GET_AUTH_CALLBACK].
      */
     private fun handleGetExternalAuth(payload: JsonObject?) {
         val callback = payload?.getStringOrNull("callback") ?: ""
-        if (callback == GET_AUTH_CALLBACK) {
-            presenter.onGetExternalAuth(
-                this,
-                callback,
-                force = payload?.getBooleanOrNull("force") ?: false,
-            )
-        } else {
-            Timber.w("Aborting getExternalAuth callback is not the one expected ($GET_AUTH_CALLBACK)")
+        if (FailFast.failWhen(callback != EXPECTED_GET_AUTH_CALLBACK) {
+                "Aborting getExternalAuth: callback '$callback' does not match expected '$EXPECTED_GET_AUTH_CALLBACK'"
+            }
+        ) {
+            return
         }
+        presenter.onGetExternalAuth(
+            this,
+            callback,
+            force = payload?.getBooleanOrNull("force") ?: false,
+        )
     }
 
     /**
      * Validates and handles a `revokeExternalAuth` request from either V1 or V2 bridge.
      *
-     * Rejects requests whose callback name does not match the expected [REVOKE_AUTH_CALLBACK].
+     * Rejects requests whose callback name does not match the expected [EXPECTED_REVOKE_AUTH_CALLBACK].
      */
     private fun handleRevokeExternalAuth(payload: JsonObject?) {
         val callback = payload?.getStringOrNull("callback") ?: ""
-        if (callback == REVOKE_AUTH_CALLBACK) {
-            presenter.onRevokeExternalAuth(callback)
-            isRelaunching = true
-        } else {
-            Timber.w("Aborting revokeExternalAuth callback is not the one expected ($REVOKE_AUTH_CALLBACK)")
+        if (FailFast.failWhen(callback != EXPECTED_REVOKE_AUTH_CALLBACK) {
+                "Aborting revokeExternalAuth: callback '$callback' does not match expected '$EXPECTED_REVOKE_AUTH_CALLBACK'"
+            }
+        ) {
+            return
         }
+        presenter.onRevokeExternalAuth(callback)
+        isRelaunching = true
     }
 
     /**
@@ -1069,6 +1083,12 @@ class WebViewActivity :
                 // Set event listener for HA theme change
                 lifecycleScope.launch {
                     val themeCallback = externalBusCallback("{type:'onHomeAssistantSetTheme'}")
+                    // Opts into [EvaluateJavascriptUsage] to install a DOM listener for the
+                    // `settheme` event so theme changes are forwarded to the native app through
+                    // the external bus as `onHomeAssistantSetTheme`. This should be replaced with
+                    // a proper external bus message, but this was made before the
+                    // [EvaluateJavascriptUsage] policy.
+                    @OptIn(EvaluateJavascriptUsage::class)
                     webView.evaluateJavascript(
                         "document.addEventListener('settheme', $themeCallback);",
                         null,
@@ -1167,8 +1187,7 @@ class WebViewActivity :
                 val filename = json.getStringOrNull("filename")
                 blobData?.let {
                     lifecycleScope.launch {
-                        DataUriDownloadManager.saveDataUri(
-                            this@WebViewActivity,
+                        dataUriDownloadManager.saveDataUri(
                             url = it,
                             mimetype = "",
                             filename = filename,
@@ -1180,25 +1199,6 @@ class WebViewActivity :
             else -> presenter.onExternalBusMessage(json)
         }
     }
-
-    /**
-     * Returns a JS `function()` expression that sends [jsonPayload] through the external bus.
-     *
-     * The returned string is a complete `function() { ... }` expression that can be used
-     * directly as a callback.
-     *
-     * For V1: calls `window.externalApp.externalBus(...)` directly.
-     * For V2: posts a `{type:'externalBus', payload:...}` message via `window.externalAppV2`.
-     */
-    private fun externalBusCallback(jsonPayload: String): String = """
-        function() {
-            if (typeof window.$EXTERNAL_APP_V2_LISTENER !== 'undefined') {
-                window.$EXTERNAL_APP_V2_LISTENER.postMessage(JSON.stringify({type:'externalBus',payload:$jsonPayload}));
-            } else {
-                window.$EXTERNAL_APP_V1.externalBus(JSON.stringify($jsonPayload));
-            }
-        }
-    """.trimIndent()
 
     private fun addEntityTo(json: JsonObject) {
         val payload = json["payload"]?.jsonObjectOrNull()
@@ -1326,6 +1326,12 @@ class WebViewActivity :
 
     private fun getAndSetStatusBarNavigationBarColors() {
         val htmlArraySpacer = "-SPACER-"
+
+        // Opts into [EvaluateJavascriptUsage] because no external bus message exposes computed CSS
+        // values reading these tokens from JavaScript is the only way to match system chrome to
+        // the theme. This should be replaced with a proper external bus message, but this was
+        // made before the [EvaluateJavascriptUsage] policy.
+        @OptIn(EvaluateJavascriptUsage::class)
         webView.evaluateJavascript(
             "[" +
                 "document.getElementsByTagName('html')[0].computedStyleMap().get('--app-header-background-color')[0]," +
@@ -1396,7 +1402,7 @@ class WebViewActivity :
                 window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
 
-            checkAndWarnForDisabledLocation()
+            checkLocationDisabled()
             changeLog.showChangeLog(this@WebViewActivity, false)
         }
 
@@ -1418,40 +1424,6 @@ class WebViewActivity :
             presenter.setAppActive(false)
         }
         if (!isFinishing && !isRelaunching) SensorReceiver.updateAllSensors(this)
-    }
-
-    private suspend fun checkAndWarnForDisabledLocation() {
-        var showLocationDisabledWarning = false
-        val settingsWithLocationPermissions = mutableListOf<String>()
-        if (!DisabledLocationHandler.isLocationEnabled(this) && presenter.isSsidUsed()) {
-            showLocationDisabledWarning = true
-            settingsWithLocationPermissions.add(getString(commonR.string.pref_connection_homenetwork))
-        }
-        for (manager in SensorReceiver.MANAGERS) {
-            for (basicSensor in manager.getAvailableSensors(this)) {
-                if (manager.isEnabled(this, basicSensor)) {
-                    val permissions = manager.requiredPermissions(this, basicSensor.id)
-
-                    val fineLocation = DisabledLocationHandler.containsLocationPermission(permissions, true)
-                    val coarseLocation = DisabledLocationHandler.containsLocationPermission(permissions, false)
-
-                    if ((fineLocation || coarseLocation)) {
-                        if (!DisabledLocationHandler.isLocationEnabled(this)) showLocationDisabledWarning = true
-                        settingsWithLocationPermissions.add(getString(basicSensor.name))
-                    }
-                }
-            }
-        }
-
-        if (showLocationDisabledWarning) {
-            DisabledLocationHandler.showLocationDisabledWarnDialog(
-                this@WebViewActivity,
-                settingsWithLocationPermissions.toTypedArray(),
-                true,
-            )
-        } else {
-            DisabledLocationHandler.removeLocationDisabledWarning(this@WebViewActivity)
-        }
     }
 
     fun exoPlayHls(json: JsonObject) {
@@ -1506,29 +1478,29 @@ class WebViewActivity :
         }
     }
 
-    @OptIn(UnstableApi::class)
+    @androidx.annotation.OptIn(UnstableApi::class)
     fun exoResizeHls(json: JsonObject) {
         val payload = json["payload"]?.jsonObjectOrNull() ?: return
         // Payload is https://developer.mozilla.org/en-US/docs/Web/API/Element/getBoundingClientRect
         // The values are already scaled to the screen.
         // We only need to store the top left corner for the offset and the player size
 
-        val left = payload.getIntOrElse("left", 0)
-        val top = payload.getIntOrElse("top", 0)
-        val right = payload.getIntOrElse("right", 0)
+        val left = payload.getDoubleOrElse("left", 0.0)
+        val top = payload.getDoubleOrElse("top", 0.0)
+        val right = payload.getDoubleOrElse("right", 0.0)
         // if the bottom value is not 0 we should take it it is a constraint from the frontend, otherwise we try to compute the
         // height based on the video's aspect ratio if available.
         val bottom =
-            payload.getIntOrNull("bottom")?.takeIf { it > 0 } ?: exoPlayer.value?.videoFormat?.let { videoFormat ->
+            payload.getDoubleOrNull("bottom")?.takeIf { it > 0 } ?: exoPlayer.value?.videoFormat?.let { videoFormat ->
                 if (videoFormat.width > 0) {
                     // Calculate height of the video based on aspect ratio
                     val width = right - left
                     val videoHeight = width * videoFormat.height / videoFormat.width
                     (top + videoHeight)
                 } else {
-                    payload.getIntOrNull("bottom")
+                    payload.getDoubleOrNull("bottom")
                 }
-            } ?: payload.getIntOrElse("bottom", 0)
+            } ?: payload.getDoubleOrElse("bottom", 0.0)
 
         playerTop.value = top.dp
         playerLeft.value = left.dp
@@ -1552,9 +1524,9 @@ class WebViewActivity :
         )
     }
 
-    private fun authenticationResult(result: Int) {
+    private fun authenticationResult(result: AuthenticationResult) {
         when (result) {
-            Authenticator.SUCCESS -> {
+            AuthenticationResult.SUCCESS -> {
                 Timber.d("Authentication successful, unlocking app")
                 appLocked.value = false
                 lifecycleScope.launch {
@@ -1562,12 +1534,12 @@ class WebViewActivity :
                 }
             }
 
-            Authenticator.CANCELED -> {
+            AuthenticationResult.CANCELED -> {
                 Timber.d("Authentication canceled by user, closing activity")
                 finishAffinity()
             }
 
-            else -> Timber.d("Authentication failed, retry attempts allowed")
+            AuthenticationResult.ERROR -> Timber.d("Authentication failed, retry attempts allowed")
         }
         unlockingApp = false
     }
@@ -1704,12 +1676,6 @@ class WebViewActivity :
         }
     }
 
-    /**
-     * Whether the active server supports the `externalAppV2` bridge (>= 2026.4.2).
-     */
-    private suspend fun isServerSupportingExternalAppV2(): Boolean =
-        serverManager.getServer(presenter.getActiveServer())?.version?.isAtLeast(2026, 4, 2) == true
-
     override fun showConnectionSecurityLevel(serverId: Int) {
         // Skip if already showing ConnectionSecurityLevelFragment to avoid blinking
         if (supportFragmentManager.fragments.any { it is ConnectionSecurityLevelFragment }) {
@@ -1812,11 +1778,24 @@ class WebViewActivity :
 
     override fun setExternalAuth(script: String) {
         webView.post {
+            // Opts into [EvaluateJavascriptUsage] because the external auth protocol runs on its
+            // own channel, not the external bus: the frontend installs callbacks on `window`
+            // (e.g. `window.externalAuthSetToken`) and waits for the native app to invoke them
+            // directly. The [script] is the pre-formed callback invocation no external bus
+            // equivalent exists.
+            @OptIn(EvaluateJavascriptUsage::class)
             webView.evaluateJavascript(script, null)
         }
     }
 
+    @SuppressLint("RequiresFeature")
     override fun onDestroy() {
+        val webMessageListenerSupported = WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+        webView.removeJavascriptInterface(EXTERNAL_APP_V1)
+        if (webMessageListenerSupported) {
+            WebViewCompat.removeWebMessageListener(webView, EXTERNAL_APP_V2_LISTENER)
+        }
+
         presenter.onFinish()
         super.onDestroy()
     }
@@ -2057,19 +2036,17 @@ class WebViewActivity :
             Timber.i("Fragments ${supportFragmentManager.fragments} displayed, skipping connection wait")
         } else {
             Timber.d("Waiting for loadedUrl ${sensitive(loadedUrl.toString())}")
-            Handler(Looper.getMainLooper()).postDelayed(
-                {
-                    val firstSegment = loadedUrl?.pathSegments?.firstOrNull().orEmpty()
-                    if (
-                        !isConnected &&
-                        !firstSegment.contains("api") &&
-                        !firstSegment.contains("local")
-                    ) {
-                        showError(errorType = ErrorType.TIMEOUT_EXTERNAL_BUS)
-                    }
-                },
-                CONNECTION_DELAY,
-            )
+            lifecycleScope.launch {
+                delay(CONNECTION_DELAY)
+                val firstSegment = loadedUrl?.pathSegments?.firstOrNull().orEmpty()
+                if (
+                    !isConnected &&
+                    !firstSegment.contains("api") &&
+                    !firstSegment.contains("local")
+                ) {
+                    showError(errorType = ErrorType.TIMEOUT_EXTERNAL_BUS)
+                }
+            }
         }
     }
 
@@ -2089,6 +2066,11 @@ class WebViewActivity :
 
         Timber.d("Sending: $script")
 
+        // Opts into [EvaluateJavascriptUsage] because this IS the external bus: the frontend
+        // installs `window.externalBus` as the entry point for messages, so delivering a typed
+        // [ExternalBusMessage] means invoking that function via `evaluateJavascript`. There is
+        // no higher-level alternative.
+        @OptIn(EvaluateJavascriptUsage::class)
         webView.evaluateJavascript(script, message.callback)
     }
 
@@ -2117,11 +2099,14 @@ class WebViewActivity :
                         request.addRequestHeader("Authorization", presenter.getAuthorizationHeader())
                     }
                     try {
-                        request.addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url))
+                        CookieManager.getInstance().getCookie(url)?.let { cookie ->
+                            request.addRequestHeader("Cookie", cookie)
+                        }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
                         // Cannot get cookies, probably not relevant
+                        Timber.w(e, "Cookie header not set for download request")
                     }
 
                     getSystemService<DownloadManager>()?.enqueue(request)
@@ -2131,7 +2116,7 @@ class WebViewActivity :
 
             "data" -> {
                 lifecycleScope.launch {
-                    DataUriDownloadManager.saveDataUri(this@WebViewActivity, url, mimetype)
+                    dataUriDownloadManager.saveDataUri(url = url, mimetype = mimetype)
                 }
             }
 
@@ -2185,6 +2170,11 @@ class WebViewActivity :
                     }
                 })();
             """.trimIndent()
+            // Opts into [EvaluateJavascriptUsage] because the injected async function calls back
+            // into the external bus (via `window.externalBus(...)`) so the result is delivered
+            // through the normal typed message path. This should be replaced with a proper
+            // external bus message, but this was made before the [EvaluateJavascriptUsage] policy.
+            @OptIn(EvaluateJavascriptUsage::class)
             webView.evaluateJavascript(jsCode, null)
         }
     }
@@ -2212,6 +2202,11 @@ class WebViewActivity :
         });
         document.dispatchEvent(event);
         """.trimIndent()
+        // Opts into [EvaluateJavascriptUsage] to simulate a keyboard input, which is an
+        // interaction the frontend already handles through its normal DOM event listeners — no
+        // frontend internals are being poked. This should be replaced with a proper external bus
+        // message, but this was made before the [EvaluateJavascriptUsage] policy.
+        @OptIn(EvaluateJavascriptUsage::class)
         evaluateJavascript(eventCode, null)
     }
 
@@ -2233,6 +2228,11 @@ class WebViewActivity :
         webView.settings.builtInZoomControls = presenter.isPinchToZoomEnabled()
         // Use idea from https://github.com/home-assistant/iOS/pull/1472 to filter viewport
         val pinchToZoom = if (presenter.isPinchToZoomEnabled()) "true" else "false"
+        // Opts into [EvaluateJavascriptUsage] to rewrite the `<meta name="viewport">` tag and
+        // toggle pinch-to-zoom. Viewport configuration is a WebView/HTML concern that sits below
+        // the frontend, so no external bus message can express it — this script is the only way
+        // to adjust these settings at runtime.
+        @OptIn(EvaluateJavascriptUsage::class)
         webView.evaluateJavascript(
             """
             if (typeof viewport === 'undefined') {
@@ -2285,6 +2285,12 @@ class WebViewActivity :
                     NavigateTo("/", true),
                 )
             } else {
+                // Opts into [EvaluateJavascriptUsage] to navigate to the default panel by
+                // simulating a click on the matching sidebar anchor, reaching deep into the
+                // frontend's shadow-DOM structure. Legacy fallback used only when [NavigateTo]
+                // is not supported by the server — the typed [NavigateTo] external bus message
+                // above is the modern path. Kept for backward compatibility.
+                @OptIn(EvaluateJavascriptUsage::class)
                 webView.evaluateJavascript(
                     """
                     var anchor = 'a:nth-child(1)';

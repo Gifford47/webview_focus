@@ -1,115 +1,157 @@
 package io.homeassistant.companion.android.frontend.permissions
 
-import android.webkit.PermissionRequest
+import android.annotation.SuppressLint
+import android.os.Build
+import android.webkit.PermissionRequest as WebViewPermissionRequest
+import androidx.annotation.VisibleForTesting
 import io.homeassistant.companion.android.common.data.servers.ServerManager
 import io.homeassistant.companion.android.common.util.NotificationStatusProvider
 import io.homeassistant.companion.android.common.util.PermissionChecker
+import io.homeassistant.companion.android.common.util.SingleSlotQueue
 import io.homeassistant.companion.android.database.settings.SensorUpdateFrequencySetting
 import io.homeassistant.companion.android.database.settings.Setting
 import io.homeassistant.companion.android.database.settings.SettingsDao
 import io.homeassistant.companion.android.database.settings.WebsocketSetting
 import javax.inject.Inject
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import timber.log.Timber
 
 /**
- * Represents a pending WebView permission request that requires Android runtime permissions.
- *
- * @param webViewRequest The original [PermissionRequest] from the WebView to grant/deny after the user responds
- * @param androidPermissions The Android runtime permissions that need to be requested
- * @param webViewResourcesByPermission Maps each Android permission to its corresponding WebView resource string,
- *        so that after granting we know which WebView resources to approve
- * @param alreadyGrantedResources WebView resources for which Android permissions were already granted at request
- *        time. These are deferred so that all resources can be granted in a single [PermissionRequest.grant] call.
+ * Snapshot of the WebView's requested resources: which can be auto-granted now, which still
+ * need user approval, and how to map back from each Android permission to the WebView resource
+ * string it originated from.
  */
-internal data class PendingWebViewPermissionRequest(
-    val webViewRequest: PermissionRequest,
-    val androidPermissions: List<String>,
-    val webViewResourcesByPermission: Map<String, String>,
-    val alreadyGrantedResources: List<String> = emptyList(),
+private data class WebViewPermissionStatus(
+    val alreadyGranted: List<String>,
+    val toBeGranted: List<String>,
+    val resourcesByPermission: Map<String, String>,
 )
 
 /**
- * Manages permission prompts for the frontend screen.
+ * Centralises all Android runtime permission request/result for the frontend screen.
  *
- * Determines which permissions should be requested from the user and handles the results of permission grants/denials.
+ * Each `check*` / `on*` method runs the full request/response cycle: build a [PermissionRequest],
+ * suspend until the user responds via the request's callback, then react to the result inline.
+ * The slot is freed automatically including on coroutine cancellation by the underlying
+ * [SingleSlotQueue.awaitResult].
+ *
+ * Concurrent triggers are waiting in FIFO order: a second method call suspends until the
+ * current request is resolved.
  */
-internal class PermissionManager @Inject constructor(
+internal class PermissionManager @VisibleForTesting constructor(
     private val serverManager: ServerManager,
     private val settingsDao: SettingsDao,
     @FcmSupport private val fcmSupport: Boolean,
     private val notificationStatusProvider: NotificationStatusProvider,
     private val permissionChecker: PermissionChecker,
+    // Need for testing to avoid the need of Robolectric
+    private val sdkInt: Int,
 ) {
 
-    private val _pendingWebViewPermission = MutableStateFlow<PendingWebViewPermissionRequest?>(null)
+    @Inject
+    constructor(
+        serverManager: ServerManager,
+        settingsDao: SettingsDao,
+        @FcmSupport fcmSupport: Boolean,
+        notificationStatusProvider: NotificationStatusProvider,
+        permissionChecker: PermissionChecker,
+    ) : this(
+        serverManager = serverManager,
+        settingsDao = settingsDao,
+        fcmSupport = fcmSupport,
+        notificationStatusProvider = notificationStatusProvider,
+        permissionChecker = permissionChecker,
+        sdkInt = Build.VERSION.SDK_INT,
+    )
 
-    /** The current pending WebView permission request that needs user approval, or null if none. */
-    val pendingWebViewPermission: StateFlow<PendingWebViewPermissionRequest?> = _pendingWebViewPermission.asStateFlow()
+    private val queue = SingleSlotQueue<PermissionRequest>()
 
-    /**
-     * Determines whether the notification permission prompt should be shown for the given server.
-     *
-     * The behavior differs between flavors:
-     * - **Full flavor** (FCM available): If notification permission is already granted system-wide,
-     *   returns `false` and persists this decision. FCM handles push notifications so there is no
-     *   need to configure websocket settings.
-     * - **Minimal flavor** (no FCM): Always respects the per-server stored preference regardless
-     *   of the system permission state. This allows the prompt to configure websocket-based
-     *   notification fallback even if the system permission was granted externally.
-     *
-     * @return `true` if the notification permission prompt should be shown
-     */
-    suspend fun shouldAskNotificationPermission(serverId: Int): Boolean {
-        val isPermissionAlreadyGranted = notificationStatusProvider.areNotificationsEnabled()
-        val shouldAskNotificationPermission = serverManager.integrationRepository(serverId)
-            .shouldAskNotificationPermission()
-
-        if (isPermissionAlreadyGranted && fcmSupport) {
-            serverManager.integrationRepository(serverId).setAskNotificationPermission(false)
-            return false
-        }
-
-        return shouldAskNotificationPermission ?: true
-    }
+    /** The current pending permission request that needs user approval, or null if none. */
+    val pendingPermissionRequest: StateFlow<PermissionRequest?> = queue
 
     /**
-     * Handles the result of the notification permission request.
+     * Checks whether the notification permission request should be made and, if so,
+     * enqueues a [PermissionRequest.Notification].
      *
-     * When granted on the minimal flavor (no FCM), enables websocket-based notifications by
-     * inserting settings with [WebsocketSetting.ALWAYS] and [SensorUpdateFrequencySetting.NORMAL].
-     * Always persists the decision to not prompt again for the given server.
+     * Does nothing on pre-TIRAMISU devices (POST_NOTIFICATIONS does not exist).
      *
-     * @param serverId The server ID to store the preference for
-     * @param granted Whether the user granted the notification permission
+     * Whether to ask depends on the flavor:
+     * - **Full** (FCM available): skips if notifications are already enabled system-wide, since
+     *   FCM handles push delivery without websocket configuration.
+     * - **Minimal** (no FCM): always respects the per-server stored preference, allowing the user
+     *   to configure websocket-based notification fallback.
+     *
+     * If the user dismisses the request without explicitly answering, no preference is persisted.
+     *
+     * @param serverId The server to check notification preferences for
      */
-    suspend fun onNotificationPermissionResult(serverId: Int, granted: Boolean) {
-        if (granted && !fcmSupport) {
-            settingsDao.insert(
-                Setting(
-                    id = serverId,
-                    websocketSetting = WebsocketSetting.ALWAYS,
-                    sensorUpdateFrequency = SensorUpdateFrequencySetting.NORMAL,
-                ),
+    @SuppressLint("NewApi")
+    suspend fun checkNotificationPermission(serverId: Int) {
+        if (sdkInt < Build.VERSION_CODES.TIRAMISU) return
+        if (!shouldAskNotificationPermission(serverId)) return
+
+        val granted: Boolean? = queue.awaitResult { resolve ->
+            PermissionRequest.Notification(
+                serverId = serverId,
+                onResult = { granted -> resolve(granted) },
+                onDismiss = { resolve(null) },
             )
         }
-        serverManager.integrationRepository(serverId).setAskNotificationPermission(false)
+        if (granted != null) {
+            onNotificationPermissionResult(serverId = serverId, granted = granted)
+        }
     }
 
     /**
-     * Processes a WebView permission request.
+     * Ensures the app has permission to write to external storage for a download.
      *
-     * Auto-grants resources for which the app already holds Android runtime permissions.
-     * For remaining resources, stores the request as [pendingWebViewPermission] so the UI
-     * can launch the system permission dialog.
+     * Returns `true` immediately on API 29+ (scoped storage no permission needed) and when the
+     * permission is already granted. Otherwise enqueues a [PermissionRequest.ExternalStorage],
+     * suspends until the user responds, and returns whether they granted it. The caller can then
+     * decide whether to proceed with the download.
      *
-     * @param request The [PermissionRequest] from the WebView's `onPermissionRequest` callback
+     * @return `true` if the download can proceed (permission available or not needed); `false` if
+     *         the user declined the permission
      */
-    fun onWebViewPermissionRequest(request: PermissionRequest?) {
+    suspend fun checkStoragePermissionForDownload(): Boolean {
+        if (sdkInt >= Build.VERSION_CODES.Q) return true
+        if (permissionChecker.hasPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)) return true
+
+        Timber.d("Storage permission required for download, awaiting user response")
+        return queue.awaitResult { onResult ->
+            PermissionRequest.ExternalStorage(onResult = onResult)
+        }
+    }
+
+    /**
+     * Processes a WebView permission request (camera, microphone).
+     *
+     * Resources whose Android permissions are already granted are deferred so they can be granted
+     * together with any newly-approved resources in a single [WebViewPermissionRequest.grant] call.
+     *
+     * If any permissions still need to be requested, suspends until the user responds and then
+     * grants/denies the original WebView request accordingly. Otherwise, auto-grants the
+     * already-granted resources without showing UI.
+     */
+    suspend fun onWebViewPermissionRequest(request: WebViewPermissionRequest?) {
         if (request == null) return
 
+        val status = assessWebViewPermissions(request)
+        if (status.toBeGranted.isEmpty()) {
+            autoGrantWebViewResources(request, status.alreadyGranted)
+            return
+        }
+        val grantedPermissions = queue.awaitResult { onResult ->
+            PermissionRequest.WebView(androidPermissions = status.toBeGranted, onResult = onResult)
+        }
+        resolveWebViewRequest(request, status, grantedPermissions)
+    }
+
+    /**
+     * Splits the WebView request's resources into those whose Android permissions are already
+     * granted (and can be auto-granted in one batch) and those that still need to be requested.
+     */
+    private fun assessWebViewPermissions(request: WebViewPermissionRequest): WebViewPermissionStatus {
         val alreadyGranted = mutableListOf<String>()
         val toBeGranted = mutableListOf<String>()
         val resourcesByPermission = mutableMapOf<String, String>()
@@ -124,53 +166,82 @@ internal class PermissionManager @Inject constructor(
                 resourcesByPermission[androidPermission] = resource
             }
         }
+        return WebViewPermissionStatus(
+            alreadyGranted = alreadyGranted,
+            toBeGranted = toBeGranted,
+            resourcesByPermission = resourcesByPermission,
+        )
+    }
 
-        if (toBeGranted.isNotEmpty()) {
-            Timber.d("Requesting Android permissions for WebView: $toBeGranted (already granted: $alreadyGranted)")
-            _pendingWebViewPermission.value = PendingWebViewPermissionRequest(
-                webViewRequest = request,
-                androidPermissions = toBeGranted,
-                webViewResourcesByPermission = resourcesByPermission,
-                alreadyGrantedResources = alreadyGranted,
-            )
-        } else if (alreadyGranted.isNotEmpty()) {
-            Timber.d("Auto-granting WebView resources: $alreadyGranted")
-            request.grant(alreadyGranted.toTypedArray())
+    /**
+     * Grants [alreadyGranted] resources without showing UI, or returns silently when there is
+     * nothing to grant.
+     */
+    private fun autoGrantWebViewResources(request: WebViewPermissionRequest, alreadyGranted: List<String>) {
+        if (alreadyGranted.isEmpty()) return
+        Timber.d("Auto-granting WebView resources: $alreadyGranted")
+        request.grant(alreadyGranted.toTypedArray())
+    }
+
+    /**
+     * Combines previously-granted resources from [status] with the resources the user has just
+     * approved and resolves the original [request] in a single grant/deny call.
+     */
+    private fun resolveWebViewRequest(
+        request: WebViewPermissionRequest,
+        status: WebViewPermissionStatus,
+        grantedPermissions: Map<String, Boolean>,
+    ) {
+        val newlyGrantedResources = grantedPermissions
+            .filter { (_, granted) -> granted }
+            .mapNotNull { (permission, _) -> status.resourcesByPermission[permission] }
+        val allGrantedResources = status.alreadyGranted + newlyGrantedResources
+
+        if (allGrantedResources.isNotEmpty()) {
+            Timber.d("Granting WebView resources: $allGrantedResources")
+            request.grant(allGrantedResources.toTypedArray())
+        } else {
+            Timber.d("User denied all requested permissions, denying WebView request")
+            request.deny()
         }
     }
 
     /**
-     * Resolves the pending WebView permission request after the user responds to the system
-     * permission dialog.
+     * Persists the notification permission result.
      *
-     * Grants WebView resources for permissions the user approved. Denies the request if nothing
-     * was granted.
-     *
-     * @param results Map of Android permission to whether it was granted
+     * When granted on the minimal flavor (no FCM), enables websocket-based notifications.
+     * Always marks the prompt as answered so it is not shown again for this server.
      */
-    fun onWebViewPermissionResult(results: Map<String, Boolean>) {
-        val pending = _pendingWebViewPermission.value ?: return
-        _pendingWebViewPermission.value = null
-
-        val newlyGrantedResources = results
-            .filter { (_, granted) -> granted }
-            .mapNotNull { (permission, _) -> pending.webViewResourcesByPermission[permission] }
-
-        val allGrantedResources = pending.alreadyGrantedResources + newlyGrantedResources
-
-        if (allGrantedResources.isNotEmpty()) {
-            Timber.d("Granting WebView resources: $allGrantedResources")
-            pending.webViewRequest.grant(allGrantedResources.toTypedArray())
-        } else {
-            Timber.d("User denied all requested permissions, denying WebView request")
-            pending.webViewRequest.deny()
+    private suspend fun onNotificationPermissionResult(serverId: Int, granted: Boolean) {
+        if (granted && !fcmSupport) {
+            settingsDao.insert(
+                Setting(
+                    id = serverId,
+                    websocketSetting = WebsocketSetting.ALWAYS,
+                    sensorUpdateFrequency = SensorUpdateFrequencySetting.NORMAL,
+                ),
+            )
         }
+        serverManager.integrationRepository(serverId).setAskNotificationPermission(false)
+    }
+
+    private suspend fun shouldAskNotificationPermission(serverId: Int): Boolean {
+        val isPermissionAlreadyGranted = notificationStatusProvider.areNotificationsEnabled()
+        val shouldAskNotificationPermission = serverManager.integrationRepository(serverId)
+            .shouldAskNotificationPermission()
+
+        if (isPermissionAlreadyGranted && fcmSupport) {
+            serverManager.integrationRepository(serverId).setAskNotificationPermission(false)
+            return false
+        }
+
+        return shouldAskNotificationPermission ?: true
     }
 
     private fun mapToAndroidPermission(webViewResource: String): String? {
         return when (webViewResource) {
-            PermissionRequest.RESOURCE_VIDEO_CAPTURE -> android.Manifest.permission.CAMERA
-            PermissionRequest.RESOURCE_AUDIO_CAPTURE -> android.Manifest.permission.RECORD_AUDIO
+            WebViewPermissionRequest.RESOURCE_VIDEO_CAPTURE -> android.Manifest.permission.CAMERA
+            WebViewPermissionRequest.RESOURCE_AUDIO_CAPTURE -> android.Manifest.permission.RECORD_AUDIO
             else -> {
                 Timber.w("Unknown WebView permission resource: $webViewResource")
                 null

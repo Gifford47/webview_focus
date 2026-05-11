@@ -35,10 +35,10 @@ sealed interface IncomingExternalBusMessage {
          * Unknown types are deserialized as [UnknownIncomingMessage] instead of throwing an exception.
          */
         internal val serializersModule = SerializersModule {
-            polymorphicDefaultDeserializer(IncomingExternalBusMessage::class) {
+            polymorphicDefaultDeserializer(IncomingExternalBusMessage::class) { className ->
                 object : UnknownJsonContentDeserializer<UnknownIncomingMessage>() {
                     override val builder = UnknownJsonContentBuilder { content ->
-                        UnknownIncomingMessage(content)
+                        UnknownIncomingMessage(className, content)
                     }
                 }
             }
@@ -55,7 +55,7 @@ sealed interface IncomingExternalBusMessage {
  *
  * @property content The raw JSON content of the unknown message
  */
-data class UnknownIncomingMessage(override val content: JsonElement) :
+data class UnknownIncomingMessage(override val discriminator: String?, override val content: JsonElement) :
     IncomingExternalBusMessage,
     UnknownJsonContent {
     override val id: Int? = null
@@ -142,3 +142,77 @@ data class OpenAssistPayload(
 @Serializable
 @SerialName("haptic")
 data class HapticMessage(override val id: Int? = null, val payload: HapticType) : IncomingExternalBusMessage
+
+/**
+ * Message requesting the app to open the NFC tag-write flow.
+ *
+ * The optional [TagWritePayload.tag] is a pre-filled tag identifier. When null or missing, the
+ * user is prompted to enter/scan a tag manually. Once handled, a [io.homeassistant.companion.android.frontend.externalbus.outgoing.ResultMessage.success]
+ * should be sent back to the frontend with the [id].
+ */
+@Serializable
+@SerialName("tag/write")
+data class TagWriteMessage(override val id: Int? = null, val payload: TagWritePayload = TagWritePayload()) :
+    IncomingExternalBusMessage
+
+@Serializable
+data class TagWritePayload(val tag: String? = null)
+
+/**
+ * Message carrying blob data for a file download initiated by the frontend.
+ *
+ * Sent internally by JavaScript injected in
+ * [io.homeassistant.companion.android.frontend.download.FrontendDownloadManager] via the external bus callback.
+ * The blob is read as a data URI and passed in [data], along with a [filename] derived from the
+ * original URL's content disposition or MIME type.
+ */
+@Serializable
+@SerialName("handleBlob")
+data class HandleBlobMessage(override val id: Int? = null, val data: String, val filename: String) :
+    IncomingExternalBusMessage
+
+/**
+ * Message requesting to start playing an HLS stream via ExoPlayer.
+ *
+ * The frontend provides the stream URL and an optional muted flag.
+ * The app should respond with a result message on success.
+ */
+@Serializable
+@SerialName("exoplayer/play_hls")
+data class ExoPlayerPlayHlsMessage(
+    override val id: Int? = null,
+    val payload: ExoPlayerPlayHlsPayload = ExoPlayerPlayHlsPayload(),
+) : IncomingExternalBusMessage
+
+@Serializable
+data class ExoPlayerPlayHlsPayload(val url: String? = null, val muted: Boolean = false)
+
+/**
+ * Message requesting to stop ExoPlayer playback and release the player.
+ *
+ * This is a fire-and-forget message.
+ */
+@Serializable
+@SerialName("exoplayer/stop")
+data class ExoPlayerStopMessage(override val id: Int? = null) : IncomingExternalBusMessage
+
+/**
+ * Message requesting to resize and reposition the ExoPlayer overlay.
+ *
+ * Payload values come from `Element.getBoundingClientRect()` and are already scaled
+ * to screen coordinates.
+ */
+@Serializable
+@SerialName("exoplayer/resize")
+data class ExoPlayerResizeMessage(
+    override val id: Int? = null,
+    val payload: ExoPlayerResizePayload = ExoPlayerResizePayload(),
+) : IncomingExternalBusMessage
+
+@Serializable
+data class ExoPlayerResizePayload(
+    val left: Double = 0.0,
+    val top: Double = 0.0,
+    val right: Double = 0.0,
+    val bottom: Double = 0.0,
+)

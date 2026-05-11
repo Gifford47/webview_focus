@@ -1,7 +1,8 @@
 package io.homeassistant.companion.android.frontend
 
 import android.Manifest
-import android.webkit.PermissionRequest
+import android.view.View
+import android.webkit.PermissionRequest as WebViewPermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebViewClient
 import androidx.activity.compose.LocalActivityResultRegistryOwner
@@ -9,9 +10,10 @@ import androidx.activity.result.ActivityResultRegistry
 import androidx.activity.result.ActivityResultRegistryOwner
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -28,8 +30,9 @@ import io.homeassistant.companion.android.common.data.servers.ServerManager
 import io.homeassistant.companion.android.database.settings.SettingsDao
 import io.homeassistant.companion.android.frontend.error.FrontendConnectionError
 import io.homeassistant.companion.android.frontend.error.FrontendConnectionErrorStateProvider
-import io.homeassistant.companion.android.frontend.permissions.PendingWebViewPermissionRequest
+import io.homeassistant.companion.android.frontend.js.FrontendJsBridge
 import io.homeassistant.companion.android.frontend.permissions.PermissionManager
+import io.homeassistant.companion.android.frontend.permissions.PermissionRequest
 import io.homeassistant.companion.android.testing.unit.ConsoleLogRule
 import io.homeassistant.companion.android.testing.unit.stringResource
 import io.homeassistant.companion.android.util.FakePermissionResultRegistry
@@ -40,7 +43,9 @@ import io.mockk.verify
 import junit.framework.TestCase.assertTrue
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -246,10 +251,10 @@ class FrontendScreenTest {
     }
 
     @Test
-    fun `Given Content state with showNotificationPermission false then notification prompt is not displayed`() {
+    fun `Given no pending notification permission then notification prompt is not displayed`() {
         composeTestRule.apply {
             setFrontendScreen(
-                viewState = FrontendViewState.Content(serverId = 1, url = "https://example.com", showNotificationPermission = false),
+                viewState = FrontendViewState.Content(serverId = 1, url = "https://example.com"),
             )
 
             onNodeWithText(stringResource(commonR.string.notification_permission_dialog_title)).assertDoesNotExist()
@@ -257,7 +262,7 @@ class FrontendScreenTest {
     }
 
     @Test
-    fun `Given notification prompt displayed when deny clicked then onNotificationPermissionResult is called with false`() {
+    fun `Given notification prompt displayed when deny clicked then onPermissionResult is called with false`() {
         assertNotificationPermissionClick(
             buttonStringRes = commonR.string.notification_permission_dialog_deny,
             permissionGranted = false,
@@ -266,7 +271,7 @@ class FrontendScreenTest {
     }
 
     @Test
-    fun `Given notification prompt displayed when allow clicked and granted then onNotificationPermissionResult is called with true`() {
+    fun `Given notification prompt displayed when allow clicked and granted then onPermissionResult is called with true`() {
         assertNotificationPermissionClick(
             buttonStringRes = commonR.string.notification_permission_dialog_allow,
             permissionGranted = true,
@@ -275,7 +280,7 @@ class FrontendScreenTest {
     }
 
     @Test
-    fun `Given notification prompt displayed when allow clicked and denied then onNotificationPermissionResult is called with false`() {
+    fun `Given notification prompt displayed when allow clicked and denied then onPermissionResult is called with false`() {
         assertNotificationPermissionClick(
             buttonStringRes = commonR.string.notification_permission_dialog_allow,
             permissionGranted = false,
@@ -290,13 +295,16 @@ class FrontendScreenTest {
     ) {
         val grantedPermissions = if (permissionGranted) setOf(Manifest.permission.POST_NOTIFICATIONS) else emptySet()
         val registry = FakePermissionResultRegistry(grantedPermissions = grantedPermissions)
-        var permissionResult: Boolean? = null
+        var persistedResult: Boolean? = null
 
         composeTestRule.apply {
             setFrontendScreen(
-                viewState = FrontendViewState.Content(serverId = 1, url = "https://example.com", showNotificationPermission = true),
-                onNotificationPermissionResult = { permissionResult = it },
-                supportsNotificationPermission = true,
+                viewState = FrontendViewState.Content(serverId = 1, url = "https://example.com"),
+                pendingPermissionRequest = PermissionRequest.Notification(
+                    serverId = 1,
+                    onResult = { granted -> persistedResult = granted },
+                    onDismiss = {},
+                ),
                 registry = registry,
             )
 
@@ -305,57 +313,64 @@ class FrontendScreenTest {
             onNodeWithText(stringResource(commonR.string.notification_permission_dialog_deny)).assertIsDisplayed()
             onNodeWithText(stringResource(buttonStringRes)).performClick()
 
+            waitForIdle()
             assertTrue(
-                "onNotificationPermissionResult should be called with $expectedResult",
-                permissionResult == expectedResult,
+                "persistResult should be called with $expectedResult but was $persistedResult",
+                persistedResult == expectedResult,
             )
         }
     }
 
     @Test
-    fun `Given WebView requests camera when permission not granted then system permission dialog is launched for CAMERA`() {
+    fun `Given WebView requests camera when permission not granted then system permission dialog is launched for CAMERA`() = runTest {
         val registry = FakePermissionResultRegistry(grantedPermissions = setOf(Manifest.permission.CAMERA))
-        val permissionRequest: PermissionRequest = mockk(relaxed = true) {
-            every { resources } returns arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
+        val permissionRequest: WebViewPermissionRequest = mockk(relaxed = true) {
+            every { resources } returns arrayOf(WebViewPermissionRequest.RESOURCE_VIDEO_CAPTURE)
         }
         val permissionManager = createPermissionManager()
-        permissionManager.onWebViewPermissionRequest(permissionRequest)
+        // onWebViewPermissionRequest now suspends until the user responds via pending.onResult,
+        // so we launch it; the registry below will resume it with the simulated grant result.
+        val managerJob = launch { permissionManager.onWebViewPermissionRequest(permissionRequest) }
+        advanceUntilIdle()
 
         composeTestRule.apply {
             setFrontendScreen(
                 viewState = FrontendViewState.Content(serverId = 1, url = "https://example.com"),
-                pendingWebViewPermission = permissionManager.pendingWebViewPermission.value,
-                onWebViewPermissionResult = permissionManager::onWebViewPermissionResult,
+                pendingPermissionRequest = permissionManager.pendingPermissionRequest.value,
                 registry = registry,
             )
             waitForIdle()
 
             registry.assertPermissionsRequested(Manifest.permission.CAMERA)
-            verify { permissionRequest.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) }
         }
+        // Wait for the manager's post-result logic (grant/deny on the WebView request) to run
+        // before asserting on the mocked WebView request.
+        managerJob.join()
+        verify { permissionRequest.grant(arrayOf(WebViewPermissionRequest.RESOURCE_VIDEO_CAPTURE)) }
     }
 
     @Test
-    fun `Given WebView requests mic when permission denied then WebView request is denied`() {
+    fun `Given WebView requests mic when permission denied then WebView request is denied`() = runTest {
         val registry = FakePermissionResultRegistry(grantedPermissions = emptySet())
-        val permissionRequest: PermissionRequest = mockk(relaxed = true) {
-            every { resources } returns arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+        val permissionRequest: WebViewPermissionRequest = mockk(relaxed = true) {
+            every { resources } returns arrayOf(WebViewPermissionRequest.RESOURCE_AUDIO_CAPTURE)
         }
         val permissionManager = createPermissionManager()
-        permissionManager.onWebViewPermissionRequest(permissionRequest)
+        val managerJob = launch { permissionManager.onWebViewPermissionRequest(permissionRequest) }
+        advanceUntilIdle()
 
         composeTestRule.apply {
             setFrontendScreen(
                 viewState = FrontendViewState.Content(serverId = 1, url = "https://example.com"),
-                pendingWebViewPermission = permissionManager.pendingWebViewPermission.value,
-                onWebViewPermissionResult = permissionManager::onWebViewPermissionResult,
+                pendingPermissionRequest = permissionManager.pendingPermissionRequest.value,
                 registry = registry,
             )
             waitForIdle()
 
             registry.assertPermissionsRequested(Manifest.permission.RECORD_AUDIO)
-            verify { permissionRequest.deny() }
         }
+        managerJob.join()
+        verify { permissionRequest.deny() }
     }
 
     private fun createPermissionManager(): PermissionManager = PermissionManager(
@@ -369,8 +384,7 @@ class FrontendScreenTest {
     private fun AndroidComposeTestRule<ActivityScenarioRule<HiltComponentActivity>, HiltComponentActivity>.setFrontendScreen(
         viewState: FrontendViewState,
         errorStateProvider: FrontendConnectionErrorStateProvider = FrontendConnectionErrorStateProvider.noOp,
-        pendingWebViewPermission: PendingWebViewPermissionRequest? = null,
-        onWebViewPermissionResult: (Map<String, Boolean>) -> Unit = {},
+        pendingPermissionRequest: PermissionRequest? = null,
         onBlockInsecureRetry: () -> Unit = {},
         onBlockInsecureHelpClick: suspend () -> Unit = {},
         onOpenSettings: () -> Unit = {},
@@ -379,8 +393,6 @@ class FrontendScreenTest {
         onConfigureHomeNetwork: (serverId: Int) -> Unit = { _ -> },
         onSecurityLevelHelpClick: suspend () -> Unit = {},
         onSecurityLevelDone: () -> Unit = {},
-        onNotificationPermissionResult: (Boolean) -> Unit = {},
-        supportsNotificationPermission: Boolean = false,
         registry: ActivityResultRegistry? = null,
     ) {
         setContent {
@@ -391,10 +403,8 @@ class FrontendScreenTest {
                     webViewClient = WebViewClient(),
                     webChromeClient = WebChromeClient(),
                     frontendJsCallback = FrontendJsBridge.noOp,
-                    scriptsToEvaluate = emptyFlow(),
                     errorStateProvider = errorStateProvider,
-                    pendingWebViewPermission = pendingWebViewPermission,
-                    onWebViewPermissionResult = onWebViewPermissionResult,
+                    pendingPermissionRequest = pendingPermissionRequest,
                     onBlockInsecureRetry = onBlockInsecureRetry,
                     onOpenExternalLink = {},
                     onBlockInsecureHelpClick = onBlockInsecureHelpClick,
@@ -404,10 +414,8 @@ class FrontendScreenTest {
                     onConfigureHomeNetwork = onConfigureHomeNetwork,
                     onSecurityLevelHelpClick = onSecurityLevelHelpClick,
                     onSecurityLevelDone = onSecurityLevelDone,
-                    onNotificationPermissionResult = onNotificationPermissionResult,
                     onShowSnackbar = { _, _ -> true },
                     onWebViewCreationFailed = {},
-                    supportsNotificationPermission = supportsNotificationPermission,
                 )
             }
 
@@ -448,7 +456,6 @@ class FrontendScreenTest {
                     webViewClient = WebViewClient(),
                     webChromeClient = WebChromeClient(),
                     frontendJsCallback = FrontendJsBridge.noOp,
-                    scriptsToEvaluate = emptyFlow(),
                     onBlockInsecureRetry = {},
                     onOpenExternalLink = {},
                     onBlockInsecureHelpClick = {},
@@ -474,6 +481,49 @@ class FrontendScreenTest {
             // Open Settings button should be displayed
             onNodeWithText(stringResource(commonR.string.open_settings)).performScrollTo().performClick()
             assertTrue("onOpenSettings should be called when open settings button is clicked", openSettingsCalled)
+        }
+    }
+
+    @Test
+    fun `Given Content state with customView then overlay is displayed`() {
+        composeTestRule.setContent {
+            val context = LocalContext.current
+            FrontendScreenContent(
+                onBackClick = {},
+                viewState = FrontendViewState.Content(
+                    serverId = 1,
+                    url = "https://example.com",
+                ),
+                customView = View(context),
+                webViewClient = WebViewClient(),
+                webChromeClient = WebChromeClient(),
+                frontendJsCallback = FrontendJsBridge.noOp,
+                onBlockInsecureRetry = {},
+                onOpenExternalLink = {},
+                onBlockInsecureHelpClick = {},
+                onOpenSettings = {},
+                onChangeSecurityLevel = {},
+                onOpenLocationSettings = {},
+                onConfigureHomeNetwork = { _ -> },
+                onSecurityLevelHelpClick = {},
+                onShowSnackbar = { _, _ -> true },
+                onWebViewCreationFailed = {},
+            )
+        }
+
+        composeTestRule.onNodeWithTag(CUSTOM_VIEW_OVERLAY_TAG).assertIsDisplayed()
+    }
+
+    @Test
+    fun `Given Content state without customView then overlay is not displayed`() {
+        composeTestRule.apply {
+            setFrontendScreen(
+                viewState = FrontendViewState.Content(
+                    serverId = 1,
+                    url = "https://example.com",
+                ),
+            )
+            onNodeWithTag(CUSTOM_VIEW_OVERLAY_TAG).assertDoesNotExist()
         }
     }
 

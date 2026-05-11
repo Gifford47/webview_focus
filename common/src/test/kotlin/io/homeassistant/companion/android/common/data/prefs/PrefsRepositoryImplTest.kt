@@ -1,21 +1,43 @@
 package io.homeassistant.companion.android.common.data.prefs
 
+import app.cash.turbine.test
 import io.homeassistant.companion.android.common.data.LocalStorage
 import io.homeassistant.companion.android.common.util.GestureAction
 import io.homeassistant.companion.android.common.util.HAGesture
+import io.homeassistant.companion.android.testing.unit.ConsoleLogExtension
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.extension.ExtendWith
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.ValueSource
 
+@ExtendWith(ConsoleLogExtension::class)
 class PrefsRepositoryImplTest {
-    private val localStorage = mockk<LocalStorage>()
+    private val keyChangesFlow = MutableSharedFlow<String>()
+    private val mapperSlot = slot<suspend () -> Any>()
+    private val localStorage = mockk<LocalStorage> {
+        every { observeChanges(*anyVararg<String>()) } returns keyChangesFlow
+        coEvery {
+            observeChanges(*anyVararg<String>(), mapper = capture(mapperSlot))
+        } answers {
+            merge(keyChangesFlow, flowOf("")).map { mapperSlot.captured.invoke() }
+        }
+    }
     private val integrationStorage = mockk<LocalStorage>()
 
     private lateinit var repository: PrefsRepositoryImpl
@@ -71,7 +93,7 @@ class PrefsRepositoryImplTest {
 
         val result = repository.isChangeLogPopupEnabled()
 
-        assertEquals(true, result)
+        assertTrue(result)
     }
 
     @Test
@@ -82,7 +104,7 @@ class PrefsRepositoryImplTest {
 
         val result = repository.isChangeLogPopupEnabled()
 
-        assertEquals(true, result)
+        assertTrue(result)
     }
 
     @Test
@@ -93,7 +115,7 @@ class PrefsRepositoryImplTest {
 
         val result = repository.isChangeLogPopupEnabled()
 
-        assertEquals(false, result)
+        assertFalse(result)
     }
 
     @Test
@@ -117,5 +139,75 @@ class PrefsRepositoryImplTest {
 
         // Verify no integration storage was accessed since no migration was needed
         coVerify(exactly = 0) { integrationStorage.getString(any()) }
+    }
+
+    @Test
+    fun `Given collecting flow when autoplay key changes then updated value is emitted`() = runTest {
+        coEvery { localStorage.getBoolean("autoplay_video") } returns false
+
+        repository.autoPlayVideoFlow().test {
+            assertFalse(awaitItem())
+
+            coEvery { localStorage.getBoolean("autoplay_video") } returns true
+            keyChangesFlow.emit("autoplay_video")
+
+            assertTrue(awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `Given collecting flow when full screen changes then updated full screen enabled is emitted`() = runTest {
+        coEvery { localStorage.getBoolean("fullscreen_enabled") } returns true
+
+        repository.fullScreenEnabledFlow().test {
+            assertTrue(awaitItem())
+
+            coEvery { localStorage.getBoolean("fullscreen_enabled") } returns false
+            keyChangesFlow.emit("fullscreen_enabled")
+
+            assertFalse(awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Nested
+    inner class ZoomSettingsFlow {
+
+        @Test
+        fun `Given collecting flow when zoom key changes then updated settings are emitted`() = runTest {
+            coEvery { localStorage.getInt("page_zoom_level") } returns 100
+            coEvery { localStorage.getBoolean("pinch_to_zoom_enabled") } returns false
+
+            repository.zoomSettingsFlow().test {
+                awaitItem() // consume initial emission
+
+                coEvery { localStorage.getInt("page_zoom_level") } returns 200
+                keyChangesFlow.emit("page_zoom_level")
+
+                val updated = awaitItem()
+                assertEquals(200, updated.zoomLevel)
+                assertFalse(updated.pinchToZoomEnabled)
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+        @Test
+        fun `Given collecting flow when pinch to zoom key changes then updated settings are emitted`() = runTest {
+            coEvery { localStorage.getInt("page_zoom_level") } returns 100
+            coEvery { localStorage.getBoolean("pinch_to_zoom_enabled") } returns false
+
+            repository.zoomSettingsFlow().test {
+                awaitItem() // consume initial emission
+
+                coEvery { localStorage.getBoolean("pinch_to_zoom_enabled") } returns true
+                keyChangesFlow.emit("pinch_to_zoom_enabled")
+
+                val updated = awaitItem()
+                assertEquals(100, updated.zoomLevel)
+                assertTrue(updated.pinchToZoomEnabled)
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
     }
 }
