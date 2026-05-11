@@ -15,6 +15,7 @@ import io.homeassistant.companion.android.common.R as commonR
 import io.homeassistant.companion.android.common.data.keychain.KeyChainRepository
 import io.homeassistant.companion.android.common.data.keychain.NamedKeyChain
 import io.homeassistant.companion.android.frontend.error.FrontendConnectionError
+import io.homeassistant.companion.android.util.compose.webview.BLANK_URL
 import javax.inject.Inject
 import kotlinx.coroutines.flow.StateFlow
 import timber.log.Timber
@@ -96,6 +97,12 @@ class HAWebViewClient internal constructor(
     /** Last resource URL loaded by the WebView, used to identify the resource requesting auth. */
     private var lastResourceUrl: String? = null
 
+    /**
+     * Tracks the previously finished page URL so we can detect transitions out
+     * of the [BLANK_URL] placeholder and drop it from the WebView's back-stack.
+     */
+    private var lastFinishedUrl: String? = null
+
     override fun onLoadResource(view: WebView?, url: String?) {
         super.onLoadResource(view, url)
         lastResourceUrl = url
@@ -103,6 +110,15 @@ class HAWebViewClient internal constructor(
 
     override fun onPageFinished(view: WebView?, url: String?) {
         super.onPageFinished(view, url)
+        // After a transition out of about:blank (loading / error / security
+        // placeholder), wipe the back-stack so the user can't navigate back
+        // into a blank screen. Real in-frontend navigation (full page loads
+        // between content URLs, or SPA pushState that doesn't even fire here)
+        // is unaffected.
+        if (lastFinishedUrl == BLANK_URL && url != null && url != BLANK_URL) {
+            view?.clearHistory()
+        }
+        lastFinishedUrl = url
         onPageFinished?.invoke()
         notifyCanGoBack(view)
     }
