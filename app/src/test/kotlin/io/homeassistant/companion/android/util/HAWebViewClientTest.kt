@@ -135,6 +135,19 @@ class HAWebViewClientTest {
     }
 
     @Test
+    fun `Given transition between different origins when onPageFinished then clears webView history`() {
+        val webView = mockk<WebView>(relaxUnitFun = true) {
+            every { canGoBack() } returns true
+        }
+
+        // First load on internal URL, then switch to external (e.g. network change)
+        webViewClient.onPageFinished(webView, "http://192.168.1.10:8123/history?entity_id=foo")
+        webViewClient.onPageFinished(webView, "https://my.duckdns.org:8123/history?entity_id=foo")
+
+        io.mockk.verify(exactly = 1) { webView.clearHistory() }
+    }
+
+    @Test
     fun `Given SSL_DATE_INVALID error when onReceivedSslError then emits AuthenticationError`() {
         testSslError(SslError.SSL_DATE_INVALID, commonR.string.webview_error_SSL_DATE_INVALID)
     }

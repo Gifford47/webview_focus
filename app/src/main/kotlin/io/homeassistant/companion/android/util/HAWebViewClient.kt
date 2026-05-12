@@ -110,17 +110,35 @@ class HAWebViewClient internal constructor(
 
     override fun onPageFinished(view: WebView?, url: String?) {
         super.onPageFinished(view, url)
-        // After a transition out of about:blank (loading / error / security
-        // placeholder), wipe the back-stack so the user can't navigate back
-        // into a blank screen. Real in-frontend navigation (full page loads
-        // between content URLs, or SPA pushState that doesn't even fire here)
-        // is unaffected.
-        if (lastFinishedUrl == BLANK_URL && url != null && url != BLANK_URL) {
+        // Clear the WebView back-stack on transitions to a new origin: out of the
+        // about:blank placeholder (loading / error / security overlays), across
+        // internal <-> external URL switches on the same server, and across server
+        // switches. Without this, back would walk into a stale URL that is no
+        // longer reachable on the current network. Same-origin in-frontend
+        // navigation (full page loads between content URLs and SPA pushState,
+        // which doesn't even fire onPageFinished) is unaffected. Transitions
+        // INTO about:blank are skipped so the back-stack survives an error state
+        // and remains usable after recovery.
+        val previous = lastFinishedUrl
+        if (previous != null && url != null && url != BLANK_URL && originOf(previous) != originOf(url)) {
             view?.clearHistory()
         }
         lastFinishedUrl = url
         onPageFinished?.invoke()
         notifyCanGoBack(view)
+    }
+
+    /**
+     * Returns the `scheme://authority` prefix of [url], or the full string when the
+     * URL is opaque (e.g. `about:blank`). String-based so it works in plain JUnit
+     * tests without the Android framework or Robolectric.
+     */
+    private fun originOf(url: String): String {
+        val schemeEnd = url.indexOf("://")
+        if (schemeEnd == -1) return url
+        val authorityStart = schemeEnd + 3
+        val pathStart = url.indexOf('/', authorityStart)
+        return if (pathStart == -1) url else url.substring(0, pathStart)
     }
 
     override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
