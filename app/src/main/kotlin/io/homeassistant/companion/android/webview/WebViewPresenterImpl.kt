@@ -151,7 +151,7 @@ class WebViewPresenterImpl @Inject constructor(
                 // same page, including filtered views like history with date ranges.
                 // Skipped for server switches where the path may not exist and would leak
                 // navigation context from the previous server.
-                withContext(Dispatchers.Main) { view.getCurrentWebViewRelativeUrl() }
+                view.getCurrentWebViewRelativeUrl()
             } else {
                 null
             }
@@ -160,9 +160,11 @@ class WebViewPresenterImpl @Inject constructor(
                 urlState = urlState,
                 path = effectiveRelativeUrl,
                 shouldConsumePath = effectiveRelativeUrl != null,
-                // Clear history when the base URL changes (e.g. internal <-> external)
-                // because old URLs in the back stack would be unreachable on the new network.
-                keepHistory = !isNewServer && !baseUrlChanged,
+                // Keep the WebView back-stack for same-server reloads (incl. internal <-> external
+                // URL switches). The stale cross-origin previousUrl is exactly the signal
+                // resolveBackAction uses to return NavigateToRoot and route the user to the
+                // dashboard before exiting. Only server switches discard history.
+                keepHistory = !isNewServer,
             )
         }
     }
